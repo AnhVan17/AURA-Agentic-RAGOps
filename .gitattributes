@@ -1,0 +1,20 @@
+# Tự động xử lý xuống dòng cho các file text
+* text=auto
+
+# Cố định LF cho shell scripts để không bị lỗi khi chạy trên Linux/Docker
+*.sh text eol=lf
+
+# Đảm bảo các file python dùng định dạng chuẩn
+*.py text diff=python
+*.ipynb text
+*.txt text
+*.md text
+*.json text
+*.yaml text
+*.yml text
+
+# Các file binary không được thay đổi
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary

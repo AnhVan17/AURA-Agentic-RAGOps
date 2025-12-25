@@ -1,0 +1,71 @@
+app:
+    name: academic-ocr-rag-chatbot
+    version: 1.0.0
+
+toy: 
+    enabled: true
+    model: "gemini-2.5-flash"
+    max_output_tokens: 1024
+
+ingest:
+    batch_size: 64
+    ocr: 
+        dpi: 300
+        fmt: "PNG"
+        max_pages: 200
+
+qdrant:
+  url: "local"
+  api_key: null
+  distance: "Cosine"
+  prefer_grpc: false
+  hnsw:
+    m: 16
+    ef_construct: 128
+    ef_search: 128
+
+retrieval:
+  top_k: 8
+  ensemble:
+    dense: 0.6
+    bm25: 0.4
+  bm25:
+    k1: 1.5
+    b: 0.75
+    min_query_len: 2
+  hyde:
+    enable: true
+    trigger:
+      min_hits: 2
+      bm25_top1_below: 0.30   # nếu top1(bm25) < 0.30 hoặc min_hits<2 → bật
+    draft_len_sentences: 2
+compression:
+  enable: true
+  min_reduction_ratio: 0.30   # yêu cầu giảm tối thiểu 30%
+  max_output_tokens: 1024
+reorder:
+  enable: true
+  strategy: "short_to_long_group_by_heading"
+    
+guardrail:
+  min_docs: 2
+  min_ctx_tokens: 150
+  fallback_lang: "vi"
+summary:
+  max_output_tokens: 1024
+
+api:
+  rate_limit:
+    window_sec: 60
+    max_requests: 60        
+  max_upload_mb: 32
+  max_json_kb: 64
+  timeout_sec:
+    llm: 18                 
+    qdrant: 6
+retry:
+  max_attempts: 3
+  base_delay: 0.6
+  max_delay: 4.0
+i18n:
+  default_lang: "vi"
