@@ -1,0 +1,78 @@
+# ============================================================
+# LLMOps Configuration
+# ============================================================
+# File này có thể hot-reload (thay đổi mà không cần restart app)
+
+# App info
+app_name: academic-ocr-rag-chatbot
+app_version: "2.0.0"
+environment: dev
+
+# ============================================================
+# Ngày 1: LangSmith Observability
+# ============================================================
+langsmith:
+  enabled: true
+  project: academic-rag-chatbot
+
+# ============================================================
+# Ngày 3: Chunking Settings
+# ============================================================
+chunking:
+  target_tokens: 700
+  overlap_sentences: 2
+  min_chunk_tokens: 100  # Warning nếu chunk nhỏ hơn
+
+# ============================================================
+# Ngày 6: Retrieval Settings (Hybrid Search)
+# ============================================================
+retrieval:
+  top_k: 8
+  # Weights cho ensemble - có thể tune!
+  dense_weight: 0.6
+  bm25_weight: 0.4
+  # BM25 parameters
+  bm25_k1: 1.5
+  bm25_b: 0.75
+
+# ============================================================
+# Ngày 7: HyDE Settings
+# ============================================================
+hyde:
+  enabled: true
+  draft_sentences: 2
+  trigger_min_hits: 2
+  trigger_bm25_threshold: 0.30
+
+# ============================================================
+# Ngày 7: Compression Settings
+# ============================================================
+compression:
+  enabled: true
+  min_chars: 50
+  max_noise_ratio: 0.5
+
+# ============================================================
+# Ngày 8: Guardrails
+# ============================================================
+guardrail:
+  min_docs: 2
+  min_context_tokens: 150
+  fallback_response_vi: "Không đủ thông tin để trả lời chính xác."
+  fallback_response_en: "I don't have enough information to answer."
+
+# ============================================================
+# Ngày 9: Cache Settings
+# ============================================================
+cache:
+  enabled: true
+  type: memory  # memory, redis
+  ttl_seconds: 3600
+
+# ============================================================
+# LLM Settings
+# ============================================================
+llm:
+  model: gemini-2.0-flash-exp
+  temperature: 0.3
+  max_output_tokens: 2048
