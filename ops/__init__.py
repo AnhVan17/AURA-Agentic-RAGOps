@@ -14,3 +14,6 @@ from ops.observability import init_langsmith, trace_chain
 
 # Ngày 2: Loaders
 from ops.loaders import LegacyOCRLoader, AcademicDocumentLoader
+
+# Ngày 3: Splitters
+from ops.splitters import AcademicTextSplitter

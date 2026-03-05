@@ -12,55 +12,49 @@ from core.chunking.chunk import detect_lang_fast
 from lc.cache import cached_advanced_retrieve
 
 
+from ops.observability import trace_chain
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
+
+
 logger = logging.getLogger(__name__)
 
 
 def _call_llm(prompt: str, max_tokens: int = 512) -> str:
     """
-    Calls the Gemini LLM with the provided prompt and configuration.
+    Calls the Gemini LLM using LangChain's abstraction for better tracing.
     """
     try:
-        import google.generativeai as genai
         api_key = APPSETTINGS.google_api_key
         if not api_key:
             logger.error("Google API Key is missing in settings.")
             return "[Error] API Key missing."
 
-        genai.configure(api_key=api_key)
         model_name = getattr(APPSETTINGS.toy, "model", "gemini-2.5-flash")
         
-        # Đảm bảo model_name có prefix 'models/' nếu cần
-        if not model_name.startswith("models/"):
-            model_name = f"models/{model_name}"
-            
-        model = genai.GenerativeModel(model_name)
-        
-        # Thêm safety_settings để tránh bị chặn nhầm làm cụt văn bản
-        safety = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-        
-        response = model.generate_content(
-            prompt, 
-            generation_config={"max_output_tokens": max_tokens, "temperature": 0.4},
-            safety_settings=safety
+        # Tạo LLM qua LangChain để tự động trace sang LangSmith
+        llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=api_key,
+            temperature=0.4,
+            max_output_tokens=max_tokens,
         )
         
-        if response and response.text:
-            full_text = response.text.strip()
+        response = llm.invoke([HumanMessage(content=prompt)])
+        
+        if response and response.content:
+            full_text = response.content.strip()
             logger.info(f"LLM generated {len(full_text)} chars ({count_tokens(full_text)} tokens).")
             return full_text
         else:
-            logger.warning("LLM returned an empty response or was blocked.")
+            logger.warning("LLM returned an empty response.")
             return "Hệ thống không nhận được phản hồi trọn vẹn từ AI. Vui lòng thử lại."
             
     except Exception as e:
         logger.error(f"Error calling LLM: {str(e)}", exc_info=True)
         return f"[Error] LLM failed: {str(e)}"
 
+@trace_chain("qa_with_citation")
 def answer_with_citation(session_id: str, question: str, k: int = 8) -> Dict[str, Any]:
     """
     Main entry point for QA with citations. Optimized for Bilingual Support.

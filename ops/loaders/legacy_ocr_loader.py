@@ -1,14 +1,19 @@
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 from typing import Iterator
+from pathlib import Path
 
-from core.ocr import ocr_pdf  # Import code cũ
+from core.ocr import ocr_pdf 
 
 class LegacyOCRLoader(BaseLoader):
-    """Wrap code OCR cũ để có thể swap sang AWS/Google sau này."""
+    """
+    Kế thừa BaseLoader chuẩn LangChain. 
+    Wrap code OCR cũ để tách biệt tầng logic trích xuất và tầng logic ứng dụng.
+    """
     
     def __init__(self, file_path: str):
-        self.file_path = file_path
+        self.file_path = str(file_path)
+        self.file_name = Path(file_path).name
     
     def lazy_load(self) -> Iterator[Document]:
         result = ocr_pdf(self.file_path)
@@ -20,7 +25,8 @@ class LegacyOCRLoader(BaseLoader):
                 page_content=page.text,
                 metadata={
                     "source": self.file_path,
-                    "page": page.page_idx,
+                    "file_name": self.file_name,
+                    "page": page.page_idx + 1, 
                     "ocr_engine": page.engine,
                     "method": "ocr",
                 }

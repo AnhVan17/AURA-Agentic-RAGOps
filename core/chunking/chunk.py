@@ -5,10 +5,11 @@ from core.chunking.tokens import count_tokens
 import re
 
 VI_DIACRITICS = r"[àáạảãăắằặẳẵâấầậẩẫđèéẹẻẽêếềệểễìíịỉĩòóọỏõôốồộổỗơớờợởỡùúụủũưứừựửữỳýỵỷỹ]"
-HEADING_VI = re.compile(r"^\s*(Chương|Mục|Điều|Khoản|Phần)\b", re.IGNORECASE)
-HEADING_EN = re.compile(r"^\s*(Chapter|Section|Part|Appendix)\b", re.IGNORECASE)
+HEADING_VI = re.compile(r"^\s*(Chương|Mục|Điều|Khoản|Phần|Tóm tắt|Kết luận|Phương pháp|Kết quả|Giới thiệu)\b", re.IGNORECASE)
+HEADING_EN = re.compile(r"^\s*(Chapter|Section|Part|Appendix|Abstract|Introduction|Method|Methodology|Results|Discussion|Conclusion|References|Related Work|Background|Experiments)\b", re.IGNORECASE)
 HEADING_NUM = re.compile(r"^\s*((\d+(\.\d+){0,3})|([IVXLCDM]+\.?)|([A-Z]\.))\s+\S+")
 SENT_END = re.compile(r"([\.!\?…]+)([\)\]”»']*)\s+")
+MATH_LINE = re.compile(r"(\$\$.+?\$\$|\\begin\{equation|\\end\{equation|[=≈≠<>≤≥].+[=≈≠<>≤≥])")
 ALLCAPS = re.compile(r"^[A-Z0-9\s\-:]+$")
 
 @dataclass
@@ -100,6 +101,10 @@ def chunk_heading_aware(
         start_line = cursor
         cursor += len(ln) + 1 
         if not ln.strip():
+            continue
+        # Bảo vệ công thức toán: giữ nguyên dòng, không cắt câu
+        if MATH_LINE.search(ln):
+            sentence_spans.append((ln.strip(), start_line, start_line + len(ln), paths_per_line[i]))
             continue
         sents = split_sentences(ln)
         if sents:

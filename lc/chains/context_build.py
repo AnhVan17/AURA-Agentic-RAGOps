@@ -8,8 +8,10 @@ from lc.vectordb.qdrant_store import get_client, collection_name, search_dense
 from core.embedding.embed_gemini import embed_texts
 from lc.chains.compress import compress_block
 from lc.chains.reorder import reorder_short_to_long_group_by_heading
+from ops.observability import trace_chain
 
 
+@trace_chain("advanced_retrieval")
 def advanced_retrieve(session_id: str, q: str, k: int = 8,
                     use_hyde: bool = True, use_compress: bool = True, use_reorder: bool = True) -> Dict[str, Any]:
     client = get_client()

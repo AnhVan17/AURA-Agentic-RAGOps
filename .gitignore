@@ -49,4 +49,8 @@ data/
 models_list.txt
 output_check.txt
 docs/
-ui/
+scripts/
+langchain.ipynb
+models_list.txt
+output_check.txt
+tests/
