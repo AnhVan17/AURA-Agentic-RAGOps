@@ -28,7 +28,7 @@ class AcademicTextSplitter(TextSplitter):
         **kwargs: Any,
     ):
         # TextSplitter yêu cầu chunk_size và chunk_overlap
-        super().__init__(chunk_size=target_tokens, chunk_overlap=0, **kwargs)
+        super().__init__(chunk_size=target_tokens, chunk_overlap = 0, **kwargs)
         self.target_tokens = target_tokens
         self.overlap_sentences = overlap_sentences
         self.lang_hint = lang_hint
@@ -63,6 +63,7 @@ class AcademicTextSplitter(TextSplitter):
         - n_tokens     : Số token của chunk
         """
         result: List[Document] = []
+        global_idx = 0  # Bộ đếm xuyên suốt toàn file
 
         for doc in documents:
             text = doc.page_content
@@ -81,16 +82,17 @@ class AcademicTextSplitter(TextSplitter):
                 id_prefix=self.id_prefix,
             )
 
-            for idx, chunk in enumerate(chunks):
+            for chunk in chunks:
+                global_idx += 1
                 # Merge: metadata gốc + metadata chunking
                 chunk_meta = {
                     **base_meta,
-                    "chunk_id": chunk.id,
+                    "chunk_id": f"{self.id_prefix}{global_idx:05d}",
                     "section": " / ".join(chunk.heading_path) if chunk.heading_path else "",
                     "heading_path": chunk.heading_path,
                     "page": chunk.page_idx,
                     "lang": chunk.lang,
-                    "chunk_index": idx,
+                    "chunk_index": global_idx - 1,
                     "n_tokens": chunk.n_tokens,
                     "start_char": chunk.start_char,
                     "end_char": chunk.end_char,

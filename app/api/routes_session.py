@@ -19,7 +19,7 @@ from lc.chains.context_build import advanced_retrieve
 router = APIRouter()
 
 
-@router.post("session/preview")
+@router.post("/session/preview")
 async def preview_file(file: UploadFile = File(...)):
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -75,7 +75,7 @@ async def preview_chunk(
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
-    parsed = parse_file_with_ocr_if_needed(tmp_path)  # có OCR nếu cần
+    parsed = parse_file_with_ocr_if_needed(tmp_path)  
     lang = detect_lang_fast(parsed.text_norm)
     chunks = chunk_heading_aware(
         text=parsed.text_norm,
@@ -102,53 +102,56 @@ async def preview_chunk(
 
 
 @router.post("/session/upload")
-async def session_upload(request: Request,session_id: str = Query(..., min_length=1), file: UploadFile = File(...)):
+async def session_upload(request: Request, session_id: str = Query(..., min_length=1), file: UploadFile = File(...)):
     maxb = APPSETTINGS.api["max_upload_mb"] * 1024 * 1024
     cl = request.headers.get("content-length")
     if cl and int(cl) > maxb:
         raise HTTPException(status_code=413, detail="Upload too large")
     t0 = time.perf_counter()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file.filename) as tmp:
+    
+    # Lưu file tạm
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
-    # 1) parse/ocr
-    parsed = parse_file_with_ocr_if_needed(tmp_path)
-    t_parse = parsed.parse_ms
-    t_ocr = 0.0 if not parsed.note or not parsed.note.startswith("ocr_applied") else 0.0  # (đã đo trong ocr_pdf stage)
+    #Pipeline: Loader → Splitter  → Embed → Qdrant  ===
+    from ops.loaders import AcademicDocumentLoader
+    from ops.splitters import AcademicTextSplitter
 
-    # 2) chunk
-    lang = detect_lang_fast(parsed.text_norm)
+    # 1) Load — Tự động phát hiện PDF text/scan, chọn PyMuPDF hoặc OCR
+    loader = AcademicDocumentLoader(tmp_path)
+    raw_docs = list(loader.lazy_load())
+    load_method = raw_docs[0].metadata.get("method", "unknown") if raw_docs else "unknown"
+
+    # 2) Chunk — Heading-aware splitting với metadata đầy đủ
     ch_cfg = APPSETTINGS.ingest.chunk
-    chunks = chunk_heading_aware(
-        text=parsed.text_norm,
-        target_tokens=ch_cfg.get("target_tokens",700),
-        overlap_sentences=ch_cfg.get("overlap_sentences",2),
-        lang_hint=lang,
-        page_idx=None,
-        id_prefix="C"
+    splitter = AcademicTextSplitter(
+        target_tokens=ch_cfg.get("target_tokens", 700),
+        overlap_sentences=ch_cfg.get("overlap_sentences", 2),
     )
+    chunks = splitter.split_documents(raw_docs)
 
-    # 3) embed (batch)
-    texts = [c.text for c in chunks]
+    # 3) Embed (batch)
+    texts = [c.page_content for c in chunks]
     vecs, dim = embed_texts(texts, batch_size=APPSETTINGS.ingest.batch_size)
-    t_embed = 0.0  # đã log trong decorator; nếu muốn đo tại đây, tự bọc thêm time
 
-    # 4) qdrant upsert
+    # 4) Qdrant upsert
     client = get_client()
     coll = collection_name(session_id)
     ensure_collection(client, coll, dim)
     payloads = [{
-        "chunk_id": c.id,
-        "text": c.text,
-        "heading_path": c.heading_path,
-        "page_idx": c.page_idx,
-        "lang": c.lang,
-        "source_path": parsed.source_path
-    } for c in chunks]
-    ids = [f"{session_id}_{c.id}" for c in chunks]
+        "chunk_id": c.metadata.get("chunk_id", f"C{i:05d}"),
+        "text": c.page_content,
+        "heading_path": c.metadata.get("heading_path", []),
+        "section": c.metadata.get("section", ""),
+        "page_idx": c.metadata.get("page"),
+        "lang": c.metadata.get("lang", "vi"),
+        "file_name": file.filename,
+        "source_path": tmp_path,
+        "method": c.metadata.get("method", load_method),
+    } for i, c in enumerate(chunks)]
+    ids = [f"{session_id}_{p['chunk_id']}" for p in payloads]
     upsert_points(client, coll, vecs, payloads, ids)
-    t_upsert = 0.0  # nếu muốn đo, bọc thêm time
 
     # 5) BM25 Update
     bm = BM25Index(session_id)
@@ -156,28 +159,20 @@ async def session_upload(request: Request,session_id: str = Query(..., min_lengt
         bm.fit(texts, payloads)
         bm.save()
     else:
-        # append đơn giản: load -> nối -> save -> fit lại
         bm.docs_tokens += [simple_vi_en_tokens(t) for t in texts]
         bm.payloads += payloads
         bm._bm25 = None
         bm.save()
-        bm.load() 
+        bm.load()
 
     dt = (time.perf_counter() - t0) * 1000
     return {
         "session_id": session_id,
         "collection": coll,
-        "filetype": parsed.file_type,
-        "note": parsed.note,
-        "counts": {"chunks": len(chunks), "vectors": len(vecs)},
-        "stage_ms": {
-            "parse_ms": t_parse,
-            "ocr_ms": t_ocr,
-            "chunk_ms": 0,      # (đơn giản hóa; có thể đo chi tiết bằng decorator riêng)
-            "embed_ms": 0,
-            "upsert_ms": 0,
-            "total_ms": dt
-        }
+        "filename": file.filename,
+        "method": load_method,
+        "counts": {"pages": len(raw_docs), "chunks": len(chunks), "vectors": len(vecs)},
+        "stage_ms": {"total_ms": round(dt, 1)},
     }
 
 
@@ -201,8 +196,10 @@ def session_search(session_id: str, q: str, k: int = 8):
             "score": h.score,
             "text": h.payload.get("text","") if h.payload else "",
             "heading_path": h.payload.get("heading_path", []) if h.payload else [],
+            "section": h.payload.get("section", "") if h.payload else "",
             "page_idx": h.payload.get("page_idx", None) if h.payload else None,
-            "lang": h.payload.get("lang", "vi") if h.payload else "vi"
+            "lang": h.payload.get("lang", "vi") if h.payload else "vi",
+            "file_name": h.payload.get("file_name", "") if h.payload else "",
         })
     return {"k": k, "results": out}
 
