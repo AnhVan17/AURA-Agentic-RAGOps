@@ -1,0 +1,102 @@
+[
+    {
+        "question": "What are the main metrics proposed by RAGAS for evaluating RAG systems?",
+        "ground_truth": "RAGAS proposes metrics including Faithfulness (measuring factual consistency of the answer with the context), Answer Relevance (measuring how relevant the answer is to the question), Context Precision (measuring the signal-to-noise ratio of retrieved context), and Context Recall (measuring whether all relevant information was retrieved).",
+        "source_paper": "RAGAS Automated Evaluation of Retrieval Augmented Generation.pdf"
+    },
+    {
+        "question": "How does RAGAS measure Faithfulness?",
+        "ground_truth": "RAGAS measures Faithfulness by decomposing the generated answer into individual statements, then verifying each statement against the provided context to determine if it can be inferred from the context. The Faithfulness score is the ratio of statements supported by the context to the total number of statements.",
+        "source_paper": "RAGAS Automated Evaluation of Retrieval Augmented Generation.pdf"
+    },
+    {
+        "question": "What is the limitation of using perplexity for evaluating language generation in RAG?",
+        "ground_truth": "Perplexity only measures how well the model predicts the next token but does not capture whether the generated content is factually grounded in the retrieved context. It fails to measure faithfulness and can give high scores to fluent but hallucinated responses.",
+        "source_paper": "RAGAS Automated Evaluation of Retrieval Augmented Generation.pdf"
+    },
+    {
+        "question": "Why does RAGAS use LLM-as-a-Judge instead of traditional NLP metrics?",
+        "ground_truth": "Traditional NLP metrics like BLEU and ROUGE only measure surface-level token overlap and fail to capture semantic meaning. LLM-as-a-Judge can understand meaning, detect paraphrasing, identify factual consistency, and evaluate reasoning quality, making it more aligned with human judgment.",
+        "source_paper": "RAGAS Automated Evaluation of Retrieval Augmented Generation.pdf"
+    },
+    {
+        "question": "What is Context Precision in RAGAS and why is it important?",
+        "ground_truth": "Context Precision measures whether the relevant items in the retrieved context are ranked higher. It evaluates the signal-to-noise ratio of the retrieved information. It is important because even if relevant documents are retrieved, if they are buried among irrelevant ones, the LLM may not use them effectively.",
+        "source_paper": "RAGAS Automated Evaluation of Retrieval Augmented Generation.pdf"
+    },
+    {
+        "question": "What is the core innovation of the Transformer architecture introduced in the Attention paper?",
+        "ground_truth": "The core innovation is the Self-Attention mechanism (Scaled Dot-Product Attention), which allows the model to attend to all positions in the input sequence simultaneously, replacing the sequential nature of RNNs. This enables much greater parallelization during training.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "What is Multi-Head Attention and how does it improve over single attention?",
+        "ground_truth": "Multi-Head Attention runs multiple attention functions in parallel. Instead of performing a single attention function with full-dimensional keys, values, and queries, it linearly projects them h times with different learned projections. This allows the model to jointly attend to information from different representation subspaces at different positions.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "How does the Transformer handle word order without recurrence?",
+        "ground_truth": "The Transformer uses Positional Encoding to inject information about the position of tokens in the sequence. It uses sine and cosine functions of different frequencies to generate positional encodings that are added to the input embeddings at the bottom of the encoder and decoder stacks.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "What BLEU score did the Transformer achieve on the WMT 2014 English-to-German translation task?",
+        "ground_truth": "The Transformer (big) model achieved a BLEU score of 28.4 on the WMT 2014 English-to-German translation task, improving over the existing best results by more than 2 BLEU points and establishing a new state of the art.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "Why is Scaled Dot-Product Attention scaled by the square root of the dimension?",
+        "ground_truth": "For large values of the key dimension dk, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients. Scaling by 1/sqrt(dk) counteracts this effect, preventing the softmax from becoming too peaked and ensuring stable gradient flow during training.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "What is the ReAct framework and what problem does it solve?",
+        "ground_truth": "ReAct is a framework that synergizes Reasoning and Acting in language models. It solves the problem of LLMs lacking the ability to interact with external environments (like search engines or databases) while maintaining a chain of reasoning. It interleaves generating reasoning traces and task-specific actions.",
+        "source_paper": "ReAct Synergizing Reasoning and Acting in Language Models.pdf"
+    },
+    {
+        "question": "How does ReAct differ from Chain-of-Thought prompting?",
+        "ground_truth": "Chain-of-Thought only generates internal reasoning traces but cannot interact with external environments to gather new information. ReAct extends this by interleaving thought steps with action steps (like searching Wikipedia), allowing the model to retrieve real-time information and adjust its reasoning based on observations.",
+        "source_paper": "ReAct Synergizing Reasoning and Acting in Language Models.pdf"
+    },
+    {
+        "question": "What are the three types of steps in a ReAct trace?",
+        "ground_truth": "The three types are: (1) Thought - the reasoning step where the model plans what to do next, (2) Action - the step where the model executes an action in the environment such as Search or Lookup, and (3) Observation - the feedback from the environment after an action is executed.",
+        "source_paper": "ReAct Synergizing Reasoning and Acting in Language Models.pdf"
+    },
+    {
+        "question": "On which benchmarks was ReAct evaluated for knowledge-intensive tasks?",
+        "ground_truth": "ReAct was evaluated on HotpotQA (multi-hop question answering) and FEVER (fact verification). On these benchmarks, ReAct outperformed vanilla action generation by producing more grounded and interpretable task-solving trajectories.",
+        "source_paper": "ReAct Synergizing Reasoning and Acting in Language Models.pdf"
+    },
+    {
+        "question": "What is the hallucination problem in Chain-of-Thought that ReAct addresses?",
+        "ground_truth": "Chain-of-Thought suffers from hallucination because the model generates reasoning entirely from its internal knowledge without verifying facts against external sources. ReAct addresses this by allowing the model to search for and retrieve actual information from external sources, grounding its reasoning in real facts.",
+        "source_paper": "ReAct Synergizing Reasoning and Acting in Language Models.pdf"
+    },
+    {
+        "question": "What is the difference between Dense and Sparse retrieval in RAG systems?",
+        "ground_truth": "Dense retrieval uses neural network embeddings to represent queries and documents as dense vectors, capturing semantic meaning. Sparse retrieval (like BM25) uses term frequency and inverse document frequency to match exact keywords. Dense retrieval excels at semantic similarity while sparse retrieval excels at exact keyword matching.",
+        "source_paper": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.pdf"
+    },
+    {
+        "question": "What is the encoder-decoder architecture in the Transformer?",
+        "ground_truth": "The encoder maps an input sequence of symbols to a sequence of continuous representations. The decoder then generates an output sequence one element at a time, using the encoder output and previously generated symbols. The encoder has 6 identical layers, each with multi-head self-attention and feed-forward sub-layers.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "How does the Transformer decoder prevent attending to future positions?",
+        "ground_truth": "The decoder uses masked self-attention where the attention mechanism is modified to prevent positions from attending to subsequent positions. This masking, combined with the offset of output embeddings by one position, ensures that predictions for position i can depend only on known outputs at positions less than i.",
+        "source_paper": "Attention Is All You Need.pdf"
+    },
+    {
+        "question": "What makes RAGAS reference-free for certain metrics?",
+        "ground_truth": "RAGAS can evaluate Faithfulness and Answer Relevance without requiring human-annotated ground truth answers. It uses the LLM itself to judge whether the answer is supported by the context (Faithfulness) and whether the answer addresses the question (Relevance). Only Context Recall requires ground truth for comparison.",
+        "source_paper": "RAGAS Automated Evaluation of Retrieval Augmented Generation.pdf"
+    },
+    {
+        "question": "What is the role of residual connections and layer normalization in the Transformer?",
+        "ground_truth": "Each sub-layer in the Transformer (both self-attention and feed-forward) employs a residual connection followed by layer normalization. The output of each sub-layer is LayerNorm(x + Sublayer(x)). Residual connections help with gradient flow in deep networks, while layer normalization stabilizes activation distributions.",
+        "source_paper": "Attention Is All You Need.pdf"
+    }
+]

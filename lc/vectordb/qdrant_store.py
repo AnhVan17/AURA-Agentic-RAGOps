@@ -1,67 +1,72 @@
+"""
+Qdrant Vector Store — Hybrid Search (Dense + Sparse)
+=====================================================
+Sử dụng Named Vectors của Qdrant:
+  - "dense": BGE-M3 dense vectors (1024-dim, Cosine)
+  - "sparse": BGE-M3 learned sparse vectors (token weights)
+
+Hybrid Search = prefetch dense + sparse → RRF fusion
+"""
 from __future__ import annotations
-from typing import List, Tuple, Dict, Any
+from typing import List, Dict, Any
 from app.settings import APPSETTINGS
-from core.embedding.embed_gemini import embed_texts
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from core.embedding.embed_bge import DENSE_DIM
+import uuid
+import logging
+
+logger = logging.getLogger(__name__)
+
+_client: QdrantClient | None = None
+
 
 def get_client() -> QdrantClient:
-    if APPSETTINGS.qdrant.url == "local":
-        return QdrantClient(path="qdrant_local_db")
-    return QdrantClient(
-        url=APPSETTINGS.qdrant.url,
-        api_key=APPSETTINGS.qdrant.api_key,
-        prefer_grpc=APPSETTINGS.qdrant.prefer_grpc,
-    )
+    """Singleton: chỉ tạo 1 QdrantClient duy nhất."""
+    global _client
+    if _client is None:
+        if APPSETTINGS.qdrant.url == "local":
+            _client = QdrantClient(path="qdrant_local_db")
+        else:
+            _client = QdrantClient(
+                url=APPSETTINGS.qdrant.url,
+                api_key=APPSETTINGS.qdrant.api_key,
+                prefer_grpc=APPSETTINGS.qdrant.prefer_grpc,
+            )
+    return _client
+
 
 def collection_name(session_id: str) -> str:
     return f"{APPSETTINGS.qdrant_collection_prefix}{session_id}"
 
-def ensure_collection(client: QdrantClient, coll: str, vector_size: int):
-    # 1. Check if the Collection already exists
-    if client.collection_exists(collection_name=coll):
-        # 2. If it exists, CHECK COMPATIBILITY (Important)
-        info = client.get_collection(coll)
-        
-        # Note: vectors_config can be a dict or an object depending on the version.
-        # The code below handles the most common case (single vector param).
-        try:
-            existing_size = info.config.params.vectors.size
-        except AttributeError:
-            # Handle named vectors case (advanced), accessing 'default' if applicable
-            existing_size = info.config.params.vectors['default'].size
 
-        if existing_size != vector_size:
-            raise ValueError(
-                f"❌ Vector Size Mismatch! Collection '{coll}' has size={existing_size}, "
-                f"but the current model requires size={vector_size}. "
-                "Please rename the collection or delete the existing one."
-            )
-        
-        print(f"✅ Collection '{coll}' already exists and matches the configuration.")
+def ensure_collection(client: QdrantClient, coll: str, vector_size: int = DENSE_DIM):
+    """Tạo collection với Named Vectors: dense (VectorParams) + sparse (SparseVectorParams)."""
+    if client.collection_exists(collection_name=coll):
+        logger.info(f"Collection '{coll}' already exists.")
         return
 
-    # 3. If not exists -> Create new
-    print(f"⚠️ Collection '{coll}' not found. Creating a new one...")
-    try:
-        client.create_collection(
-            collection_name=coll,
-            vectors_config=models.VectorParams(
+    logger.info(f"Creating collection '{coll}' with hybrid vectors...")
+    client.create_collection(
+        collection_name=coll,
+        vectors_config={
+            "dense": models.VectorParams(
                 size=vector_size,
-                distance=models.Distance.COSINE
+                distance=models.Distance.COSINE,
             ),
-            # Optimize HNSW for speed/RAM balance
-            hnsw_config=models.HnswConfigDiff(
-                m=16,           
-                ef_construct=100 
-            )
-        )
-        print(f"🎉 Collection '{coll}' created successfully.")
-    except Exception as e:
-        print(f"❌ Failed to create Collection: {e}")
-        raise e
+        },
+        sparse_vectors_config={
+            "sparse": models.SparseVectorParams(
+                modifier=models.Modifier.IDF,  # IDF weighting cho sparse
+            ),
+        },
+        hnsw_config=models.HnswConfigDiff(
+            m=16,
+            ef_construct=128,
+        ),
+    )
+    logger.info(f"Collection '{coll}' created with dense({vector_size}) + sparse vectors.")
 
-import uuid
 
 def _is_valid_uuid(val: Any) -> bool:
     try:
@@ -70,27 +75,101 @@ def _is_valid_uuid(val: Any) -> bool:
     except ValueError:
         return False
 
-def upsert_points(client: QdrantClient, coll : str, vectors: List[List[float]], payloads: List[Dict[str,Any]], ids: List[str]):
-    qdrant_ids = []
-    for doc_id in ids:
-        # Nếu là số nguyên hoặc UUID hợp chuẩn thì giữ nguyên
+
+def upsert_points(
+    client: QdrantClient,
+    coll: str,
+    dense_vectors: List[List[float]],
+    sparse_vectors: List[Dict[int, float]],
+    payloads: List[Dict[str, Any]],
+    ids: List[str],
+):
+    """Upsert points với cả dense và sparse vectors."""
+    points = []
+    for i, doc_id in enumerate(ids):
+        # Generate Qdrant-compatible ID
         if isinstance(doc_id, int) or _is_valid_uuid(doc_id):
-            qdrant_ids.append(doc_id)
+            qid = doc_id
         else:
-            # Nếu là chuỗi bất kỳ, băm thành UUID chuẩn
-            qdrant_ids.append(str(uuid.uuid5(uuid.NAMESPACE_DNS, str(doc_id))))
+            qid = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(doc_id)))
 
-    client.upsert(
-        collection_name =coll,
-        points = models.Batch(ids = qdrant_ids, vectors = vectors, payloads = payloads)
-    )
+        # Convert sparse dict {token_id: weight} → SparseVector
+        sp = sparse_vectors[i]
+        sparse_indices = list(sp.keys())
+        sparse_values = list(sp.values())
 
-def search_dense (client: QdrantClient, coll : str, query_vector: List[float], limit: int = 10):
-    return client.query_points(
-        collection_name = coll,
-        query = query_vector,
-        limit = limit,
-        with_payload = True,
-        search_params=models.SearchParams(hnsw_ef=APPSETTINGS.qdrant.hnsw.get("ef_search", 128))
+        points.append(models.PointStruct(
+            id=qid,
+            vector={
+                "dense": dense_vectors[i],
+                "sparse": models.SparseVector(
+                    indices=sparse_indices,
+                    values=sparse_values,
+                ),
+            },
+            payload=payloads[i],
+        ))
+
+    # Upsert in batches of 64
+    batch_size = 64
+    for start in range(0, len(points), batch_size):
+        batch = points[start:start + batch_size]
+        client.upsert(collection_name=coll, points=batch)
+    logger.info(f"Upserted {len(points)} points to '{coll}'")
+
+
+def search_hybrid(
+    client: QdrantClient,
+    coll: str,
+    dense_vector: List[float],
+    sparse_vector: Dict[int, float],
+    limit: int = 10,
+) -> list:
+    """
+    Qdrant Native Hybrid Search:
+      1. Prefetch top-K from Dense
+      2. Prefetch top-K from Sparse
+      3. RRF (Reciprocal Rank Fusion) để merge kết quả
+    """
+    sparse_indices = list(sparse_vector.keys())
+    sparse_values = list(sparse_vector.values())
+
+    results = client.query_points(
+        collection_name=coll,
+        prefetch=[
+            models.Prefetch(
+                query=dense_vector,
+                using="dense",
+                limit=limit * 2,
+            ),
+            models.Prefetch(
+                query=models.SparseVector(
+                    indices=sparse_indices,
+                    values=sparse_values,
+                ),
+                using="sparse",
+                limit=limit * 2,
+            ),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=limit,
+        with_payload=True,
     ).points
-    
+
+    return results
+
+
+def search_dense(
+    client: QdrantClient,
+    coll: str,
+    query_vector: List[float],
+    limit: int = 10,
+) -> list:
+    """Dense-only search (backward compatible)."""
+    return client.query_points(
+        collection_name=coll,
+        query=query_vector,
+        using="dense",
+        limit=limit,
+        with_payload=True,
+    ).points

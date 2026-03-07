@@ -54,3 +54,4 @@ langchain.ipynb
 models_list.txt
 output_check.txt
 tests/
+eval/

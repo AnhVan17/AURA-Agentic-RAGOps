@@ -6,14 +6,14 @@ from core.chunking.chunk import chunk_heading_aware, detect_lang_fast
 import shutil
 import tempfile
 import time
+import logging
 from typing import Any, Dict
 from pathlib import Path
-from core.embedding.embed_gemini import embed_texts
-from lc.vectordb.qdrant_store import get_client, collection_name, ensure_collection, upsert_points, search_dense
-from lc.retrievers.bm25 import BM25Index
-from lc.retrievers.ensemble import ensemble_merge
-from lc.retrievers.tokenizer import simple_vi_en_tokens
+from core.embedding.embed_bge import embed_dense_sparse, embed_query
+from lc.vectordb.qdrant_store import get_client, collection_name, ensure_collection, upsert_points, search_hybrid, search_dense
 from lc.chains.context_build import advanced_retrieve
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -131,14 +131,17 @@ async def session_upload(request: Request, session_id: str = Query(..., min_leng
     )
     chunks = splitter.split_documents(raw_docs)
 
-    # 3) Embed (batch)
+    # 3) Embed với BGE-M3 (Dense + Sparse cùng lúc)
     texts = [c.page_content for c in chunks]
-    vecs, dim = embed_texts(texts, batch_size=APPSETTINGS.ingest.batch_size)
+    logger.info(f"Embedding {len(texts)} chunks with BGE-M3...")
+    embed_result = embed_dense_sparse(texts, batch_size=16)
+    dense_vecs = embed_result["dense"]
+    sparse_vecs = embed_result["sparse"]
 
-    # 4) Qdrant upsert
+    # 4) Qdrant upsert (cả dense + sparse)
     client = get_client()
     coll = collection_name(session_id)
-    ensure_collection(client, coll, dim)
+    ensure_collection(client, coll)
     payloads = [{
         "chunk_id": c.metadata.get("chunk_id", f"C{i:05d}"),
         "text": c.page_content,
@@ -151,19 +154,7 @@ async def session_upload(request: Request, session_id: str = Query(..., min_leng
         "method": c.metadata.get("method", load_method),
     } for i, c in enumerate(chunks)]
     ids = [f"{session_id}_{p['chunk_id']}" for p in payloads]
-    upsert_points(client, coll, vecs, payloads, ids)
-
-    # 5) BM25 Update
-    bm = BM25Index(session_id)
-    if not bm.load():
-        bm.fit(texts, payloads)
-        bm.save()
-    else:
-        bm.docs_tokens += [simple_vi_en_tokens(t) for t in texts]
-        bm.payloads += payloads
-        bm._bm25 = None
-        bm.save()
-        bm.load()
+    upsert_points(client, coll, dense_vecs, sparse_vecs, payloads, ids)
 
     dt = (time.perf_counter() - t0) * 1000
     return {
@@ -171,37 +162,48 @@ async def session_upload(request: Request, session_id: str = Query(..., min_leng
         "collection": coll,
         "filename": file.filename,
         "method": load_method,
-        "counts": {"pages": len(raw_docs), "chunks": len(chunks), "vectors": len(vecs)},
+        "embedding_model": "BGE-M3",
+        "counts": {"pages": len(raw_docs), "chunks": len(chunks), "vectors": len(dense_vecs)},
         "stage_ms": {"total_ms": round(dt, 1)},
     }
 
 
 @router.get("/session/search")
 def session_search(session_id: str, q: str, k: int = 8):
+    """Qdrant Native Hybrid Search: BGE-M3 Dense + Sparse → RRF Fusion."""
     if not q or not session_id:
         raise HTTPException(status_code=400, detail="Missing q or session_id")
-    # embed câu hỏi
-    vecs, dim = embed_texts([q], batch_size=1)
-    qvec = vecs[0]
+    
+    # 1. Embed query với BGE-M3 (dense + sparse cùng lúc)
+    q_embed = embed_query(q)
+    
+    # 2. Qdrant Hybrid Search (RRF Fusion)
     client = get_client()
     coll = collection_name(session_id)
     try:
-        hits = search_dense(client, coll, qvec, limit=k)
+        hits = search_hybrid(
+            client, coll,
+            dense_vector=q_embed["dense"],
+            sparse_vector=q_embed["sparse"],
+            limit=k,
+        )
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Collection not found or search error: {e}")
+    
     out = []
     for h in hits:
+        pl = h.payload if h.payload else {}
         out.append({
-            "id": h.payload.get("chunk_id", h.id) if h.payload else h.id,
+            "id": pl.get("chunk_id", h.id),
             "score": h.score,
-            "text": h.payload.get("text","") if h.payload else "",
-            "heading_path": h.payload.get("heading_path", []) if h.payload else [],
-            "section": h.payload.get("section", "") if h.payload else "",
-            "page_idx": h.payload.get("page_idx", None) if h.payload else None,
-            "lang": h.payload.get("lang", "vi") if h.payload else "vi",
-            "file_name": h.payload.get("file_name", "") if h.payload else "",
+            "text": pl.get("text", ""),
+            "heading_path": pl.get("heading_path", []),
+            "section": pl.get("section", ""),
+            "page_idx": pl.get("page_idx", None),
+            "lang": pl.get("lang", "vi"),
+            "file_name": pl.get("file_name", ""),
         })
-    return {"k": k, "results": out}
+    return {"k": k, "mode": "hybrid_rrf", "embedding": "BGE-M3", "results": out}
 
 
 @router.get("/session/search_hybrid")
