@@ -97,20 +97,40 @@ def advanced_retrieve(session_id: str, q: str, k: int = 8,
             doc_entry = {**p, "score_final": final_score, "contrib": parts}
             top_docs.append(doc_entry)
 
-    # Compression
+    # Compression (Sử dụng RegexContextCompressor - Langchain BaseDocumentCompressor)
     comp_info = {"used": False, "ratio": 0.0}
     context_joined = ""
     comp_cfg = APPSETTINGS.compression
     if use_compress and comp_cfg.enable and top_docs:
-        raw_context = "\n\n".join(d["text"] for d in top_docs)
-        cret = compress_block(raw_context,
-                              min_ratio=comp_cfg.min_reduction_ratio,
-                              max_out_tokens=comp_cfg.max_output_tokens)
-        if cret.get("compressed"):
-            comp_info = {"used": True, "ratio": round(cret["reduction_ratio"], 3)}
-            context_joined = cret["compressed"]
+        from lc.retrievers.compressor import RegexContextCompressor
+        from langchain_core.documents import Document
+        from lc.chains.compress import count_tokens
+
+        # Chuyển đổi sang list[Document] theo chuẩn Langchain
+        docs = [Document(page_content=d["text"], metadata=d) for d in top_docs]
+        
+        total_before = sum(count_tokens(d.page_content) for d in docs)
+        
+        # Nén (Lọc bằng Regex)
+        compressor = RegexContextCompressor()
+        compressed_docs = compressor.compress_documents(docs, query=q)
+        
+        total_after = sum(count_tokens(d.page_content) for d in compressed_docs)
+        
+        if compressed_docs:
+            comp_info = {
+                "used": True, 
+                "ratio": round(1 - (total_after / max(1, total_before)), 2)
+            }
+            # Thay thế text đã nén vào top_docs để reorder hoạt động chính xác
+            for cd in compressed_docs:
+                for td in top_docs:
+                    if td["chunk_id"] == cd.metadata.get("chunk_id"):
+                        td["text"] = cd.page_content
+            
+            context_joined = "\n\n".join(d.page_content for d in compressed_docs)
         else:
-            context_joined = raw_context
+            context_joined = "\n\n".join(d["text"] for d in top_docs)
     else:
         context_joined = "\n\n".join(d["text"] for d in top_docs)
 

@@ -9,8 +9,11 @@ import time
 import logging
 from typing import Any, Dict
 from pathlib import Path
-from core.embedding.embed_bge import embed_dense_sparse, embed_query
-from lc.vectordb.qdrant_store import get_client, collection_name, ensure_collection, upsert_points, search_hybrid, search_dense
+from core.embedding.embed_gemini import embed_texts
+from lc.vectordb.qdrant_store import get_client, collection_name, ensure_collection, upsert_points, search_dense
+from lc.retrievers.bm25 import BM25Index
+from lc.retrievers.ensemble import ensemble_merge
+from lc.retrievers.tokenizer import simple_vi_en_tokens
 from lc.chains.context_build import advanced_retrieve
 
 logger = logging.getLogger(__name__)
@@ -131,17 +134,14 @@ async def session_upload(request: Request, session_id: str = Query(..., min_leng
     )
     chunks = splitter.split_documents(raw_docs)
 
-    # 3) Embed với BGE-M3 (Dense + Sparse cùng lúc)
+    # 3) Embed (batch)
     texts = [c.page_content for c in chunks]
-    logger.info(f"Embedding {len(texts)} chunks with BGE-M3...")
-    embed_result = embed_dense_sparse(texts, batch_size=16)
-    dense_vecs = embed_result["dense"]
-    sparse_vecs = embed_result["sparse"]
+    vecs, dim = embed_texts(texts, batch_size=APPSETTINGS.ingest.batch_size)
 
-    # 4) Qdrant upsert (cả dense + sparse)
+    # 4) Qdrant upsert
     client = get_client()
     coll = collection_name(session_id)
-    ensure_collection(client, coll)
+    ensure_collection(client, coll, dim)
     payloads = [{
         "chunk_id": c.metadata.get("chunk_id", f"C{i:05d}"),
         "text": c.page_content,
@@ -154,7 +154,19 @@ async def session_upload(request: Request, session_id: str = Query(..., min_leng
         "method": c.metadata.get("method", load_method),
     } for i, c in enumerate(chunks)]
     ids = [f"{session_id}_{p['chunk_id']}" for p in payloads]
-    upsert_points(client, coll, dense_vecs, sparse_vecs, payloads, ids)
+    upsert_points(client, coll, vecs, payloads, ids)
+
+    # 5) BM25 Update
+    bm = BM25Index(session_id)
+    if not bm.load():
+        bm.fit(texts, payloads)
+        bm.save()
+    else:
+        bm.docs_tokens += [simple_vi_en_tokens(t) for t in texts]
+        bm.payloads += payloads
+        bm._bm25 = None
+        bm.save()
+        bm.load()
 
     dt = (time.perf_counter() - t0) * 1000
     return {
@@ -162,48 +174,82 @@ async def session_upload(request: Request, session_id: str = Query(..., min_leng
         "collection": coll,
         "filename": file.filename,
         "method": load_method,
-        "embedding_model": "BGE-M3",
-        "counts": {"pages": len(raw_docs), "chunks": len(chunks), "vectors": len(dense_vecs)},
+        "counts": {"pages": len(raw_docs), "chunks": len(chunks), "vectors": len(vecs)},
         "stage_ms": {"total_ms": round(dt, 1)},
     }
 
 
 @router.get("/session/search")
 def session_search(session_id: str, q: str, k: int = 8):
-    """Qdrant Native Hybrid Search: BGE-M3 Dense + Sparse → RRF Fusion."""
+    """Hybrid Search: Dense (Qdrant) + Sparse (BM25) → Ensemble Merge."""
     if not q or not session_id:
         raise HTTPException(status_code=400, detail="Missing q or session_id")
     
-    # 1. Embed query với BGE-M3 (dense + sparse cùng lúc)
-    q_embed = embed_query(q)
-    
-    # 2. Qdrant Hybrid Search (RRF Fusion)
+    # 1. Dense Search (Vector)
+    vecs, dim = embed_texts([q], batch_size=1)
+    qvec = vecs[0]
     client = get_client()
     coll = collection_name(session_id)
     try:
-        hits = search_hybrid(
-            client, coll,
-            dense_vector=q_embed["dense"],
-            sparse_vector=q_embed["sparse"],
-            limit=k,
-        )
+        dense_hits = search_dense(client, coll, qvec, limit=k)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Collection not found or search error: {e}")
-    
-    out = []
-    for h in hits:
-        pl = h.payload if h.payload else {}
-        out.append({
-            "id": pl.get("chunk_id", h.id),
-            "score": h.score,
-            "text": pl.get("text", ""),
-            "heading_path": pl.get("heading_path", []),
-            "section": pl.get("section", ""),
-            "page_idx": pl.get("page_idx", None),
-            "lang": pl.get("lang", "vi"),
-            "file_name": pl.get("file_name", ""),
-        })
-    return {"k": k, "mode": "hybrid_rrf", "embedding": "BGE-M3", "results": out}
+    dense_pairs = [(str(h.payload.get("chunk_id", h.id)), float(h.score)) for h in dense_hits]
+
+    # 2. Sparse Search (BM25)
+    bm = BM25Index(session_id)
+    bm25_pairs = []
+    bm25_hits = []
+    if bm.load():
+        bm25_hits = bm.search(q, k=k)
+        for hit in bm25_hits:
+            pl = bm.get_payload(hit.idx)
+            bm25_pairs.append((pl.get("chunk_id"), hit.score))
+
+    # 3. Ensemble Merge (nếu có BM25)
+    if bm25_pairs:
+        w_dense = APPSETTINGS.retrieval.ensemble.get("dense", 0.6)
+        w_bm25 = APPSETTINGS.retrieval.ensemble.get("bm25", 0.4)
+        merged = ensemble_merge(dense_pairs, bm25_pairs, w_dense, w_bm25, k=k)
+
+        # Build payload lookup
+        payload_by_id = {}
+        for h in dense_hits:
+            cid = str(h.payload.get("chunk_id", h.id))
+            payload_by_id[cid] = h.payload if h.payload else {}
+        for hit in bm25_hits:
+            pl = bm.get_payload(hit.idx)
+            payload_by_id[pl.get("chunk_id", "")] = pl
+
+        out = []
+        for pid, final, parts in merged:
+            payload = payload_by_id.get(pid, {})
+            out.append({
+                "id": pid,
+                "score": final,
+                "contrib": parts,
+                "text": payload.get("text", ""),
+                "heading_path": payload.get("heading_path", []),
+                "section": payload.get("section", ""),
+                "page_idx": payload.get("page_idx", None),
+                "lang": payload.get("lang", "vi"),
+                "file_name": payload.get("file_name", ""),
+            })
+    else:
+        # Fallback: Dense-only (nếu chưa có BM25 index)
+        out = []
+        for h in dense_hits:
+            out.append({
+                "id": h.payload.get("chunk_id", h.id) if h.payload else h.id,
+                "score": h.score,
+                "text": h.payload.get("text","") if h.payload else "",
+                "heading_path": h.payload.get("heading_path", []) if h.payload else [],
+                "section": h.payload.get("section", "") if h.payload else "",
+                "page_idx": h.payload.get("page_idx", None) if h.payload else None,
+                "lang": h.payload.get("lang", "vi") if h.payload else "vi",
+                "file_name": h.payload.get("file_name", "") if h.payload else "",
+            })
+    return {"k": k, "mode": "hybrid" if bm25_pairs else "dense_only", "results": out}
 
 
 @router.get("/session/search_hybrid")
