@@ -1,19 +1,3 @@
-"""
-==========================================================
- AURA - Core Agent Graph (Ngày 9 & 10)
- LangGraph FSM: Router → Researcher → (Chuẩn bị cho Generator Ngày 11)
-==========================================================
-Kiến trúc:
-  START → [Router Node] 
-             ├── "chat"   → [Chat Node]       → END
-             └── "search" → [Researcher Node]  → END
-
-Cơ chế:
-  - Router: Dùng LLM (temperature=0) phân loại câu hỏi thành "chat" hoặc "search"
-  - Researcher: Gọi advanced_retrieve() từ Tuần 2 (BM25 + Qdrant + HyDE + Compression + Reorder)
-  - Chat: Gọi LLM trả lời câu hỏi xã giao
-"""
-
 import json
 import logging
 from typing import TypedDict, List, Dict, Any, Optional
@@ -27,9 +11,9 @@ from app.settings import APPSETTINGS
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
+
 # 1. ĐỊNH NGHĨA STATE (Bộ nhớ trung tâm của Graph)
-# ============================================================
+
 class GraphState(TypedDict):
     """
     Cuốn sổ tay truyền tay giữa các Node trong Graph.
@@ -54,21 +38,18 @@ class GraphState(TypedDict):
     search_meta: Dict[str, Any]
 
 
-# ============================================================
+
 # 2. KHỞI TẠO LLM DÙNG CHUNG
-# ============================================================
 def _get_llm() -> ChatGoogleGenerativeAI:
     """Tạo LLM instance (lazy, tránh lỗi khi import nếu chưa có API key)."""
     return ChatGoogleGenerativeAI(
         model=APPSETTINGS.app.default_llm,
         google_api_key=APPSETTINGS.google_api_key,
-        temperature=0,  # Nhiệt độ = 0: kết quả ổn định, không sáng tạo lung tung
+        temperature=0, 
     )
 
 
-# ============================================================
-# 3. ROUTER NODE — Cô Lễ tân thông minh
-# ============================================================
+# 3. ROUTER NODE 
 ROUTER_PROMPT_TEMPLATE = """Bạn là Router điều hướng trong hệ thống Chatbot Học thuật tiếng Việt.
 
 NHIỆM VỤ: Phân loại câu hỏi của người dùng vào đúng 1 trong 2 loại:
@@ -134,9 +115,7 @@ def router_node(state: GraphState) -> dict:
     return {"next_action": action}
 
 
-# ============================================================
-# 4. RESEARCHER NODE — Anh Thủ thư cần mẫn (Ngày 10)
-# ============================================================
+# 4. RESEARCHER NODE 
 def researcher_node(state: GraphState) -> dict:
     """
     Kích hoạt toàn bộ pipeline Retrieval của Tuần 2 để tìm tài liệu.
@@ -212,9 +191,8 @@ def researcher_node(state: GraphState) -> dict:
     }
 
 
-# ============================================================
-# 5. CHAT NODE — Xử lý câu hỏi tán gẫu
-# ============================================================
+# 5. CHAT NODE 
+
 CHAT_PROMPT_TEMPLATE = """Bạn là trợ lý học thuật thân thiện, hỗ trợ sinh viên Việt Nam.
 Hãy trả lời câu hỏi xã giao sau một cách ngắn gọn, lịch sự, bằng tiếng Việt.
 Giới thiệu bản thân là "AURA - Trợ lý Học thuật Thông minh".
@@ -242,17 +220,16 @@ def chat_node(state: GraphState) -> dict:
     return {"draft_answer": answer}
 
 
-# ============================================================
+
 # 6. CONDITIONAL EDGE — Hàm bẻ ghi đường ray
-# ============================================================
+
 def route_decision(state: GraphState) -> str:
     """Đọc next_action trong State để quyết định rẽ nhánh."""
     return state.get("next_action", "search")
 
 
-# ============================================================
 # 7. BUILD GRAPH — Ráp nối toàn bộ thành FSM
-# ============================================================
+
 def build_core_graph() -> Any:
     """
     Xây dựng và compile LangGraph.
@@ -292,9 +269,8 @@ def build_core_graph() -> Any:
     return workflow.compile()
 
 
-# ============================================================
+
 # 8. TEST CHẠY THỬ
-# ============================================================
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 

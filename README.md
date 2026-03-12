@@ -1,80 +1,137 @@
-# Academic Chatbot 🎓
+# AURA - Agentic RAGOps (Enterprise-Grade Academic Chatbot) 🎓
 
-An advanced RAG (Retrieval-Augmented Generation) system for querying and summarizing academic papers using Google's Gemini models and Qdrant vector database.
+**AURA** là một hệ thống Trợ lý ảo Học thuật Tiên tiến (Agentic RAG) được thiết kế đặc biệt để xử lý, truy xuất và tổng hợp thông tin từ các tài liệu học thuật, báo cáo khoa học, và tài liệu phức tạp (có chứa toán học, bảng biểu).
 
-## 🚀 Features
+Hệ thống vượt qua chuẩn RAG truyền thống bằng cách áp dụng kiến trúc **Đa tác nhân (Multi-Agent FSM)** với LangGraph, kết hợp cùng các công nghệ tìm kiếm siêu việt (Hybrid Search: Qdrant + BM25, HyDE, Regex Compression).
 
-- **Document Processing**: Support for PDF, DOCX, and images using OCR (RapidOCR).
-- **Advanced Retrieval**: Hybrid search combining Qdrant vector search and BM25 ranking.
-- **Intelligent QA**: Powered by LangChain and Google Gemini (1.5 Flash/Pro).
-- **Summarization**: Automated summarization of long academic documents.
-- **Bilingual Support**: Optimized for Vietnamese and English.
-- **Dual Interface**:
-  - **REST API**: Built with FastAPI for integration.
-  - **Interactive UI**: User-friendly Gradio interface.
+---
 
-## 🛠️ Technology Stack
+## 🚀 Tính năng nổi bật
 
-- **Backend**: FastAPI, Uvicorn, Pydantic
-- **LLM Framework**: LangChain, Google Generative AI
-- **Vector Database**: Qdrant
-- **OCR/Parsing**: RapidOCR, pdf2image, pdfminer.six
-- **UI**: Gradio
-- **Environment**: Python 3.10+
+1. **Agentic RAG (LangGraph)**
+   - **Router Agent**: Tự động phân loại luồng hội thoại (Tán gẫu vs. Tra cứu kiến thức học thuật).
+   - **Researcher Agent**: Tổng hợp toàn bộ công nghệ tìm kiếm nâng cao để mang về tài liệu chuẩn xác nhất.
+2. **Hybrid Retrieval Pipeline (Tìm kiếm kép)**
+   - Kết hợp **Qdrant (Dense Vector - Mức độ ngữ nghĩa)** và **BM25 (Sparse - Khớp từ khóa)** với tỷ trọng tối ưu.
+   - **HyDE (Hypothetical Document Embeddings)**: Chống lại các câu hỏi mập mờ bằng cách yêu cầu LLM tự sinh câu trả lời nháp để đi quét vector.
+   - **Context Compression**: Lọc bỏ các dòng nhiễu thông qua Regex (giữ lại công thức toán, định nghĩa, từ khóa chính) nhằm nén lượng Token đưa vào LLM.
+   - **Reorder**: Thay đổi thứ tự tài liệu để đối phó với hiện tượng "Lost in the middle" của LLM.
+3. **Data Ingestion & OCR Thông minh**
+   - Hỗ trợ đa dạng format: PDF text, PDF scan, Word.
+   - Tích hợp **RapidOCR** để bóc tách chữ từ tài liệu scan/hình ảnh.
+   - **Academic Chunking**: Bộ cắt dữ liệu (Splitter) nhận diện Heading (Chương/Mục) và không cắt đứt gãy công thức toán học.
+4. **Giám sát & Đánh giá (LLMOps)**
+   - Theo dõi từng bước chạy của Agent (Token, Latency) qua **LangSmith**.
+   - Đánh giá tự động chất lượng câu trả lời bằng thư viện **Ragas** (Context Precision, Faithfulness).
 
-## 📋 Prerequisites
+---
 
-- Python 3.10 or higher
-- Google AI Studio API Key (for Gemini)
-- Poppler (for `pdf2image` functionality)
+## 🏗 Kiến trúc hệ thống & Cách thức hoạt động
 
-## ⚙️ Installation
+Quá trình hoạt động của AURA chia thành 2 luồng chính:
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd "academic chatbot"
-   ```
+### 1. Luồng Nập liệu (Ingestion Pipeline)
+`File PDF` $\rightarrow$ `Parsing/OCR` $\rightarrow$ `Academic Chunking (cắt theo heading)` $\rightarrow$ `Embedding (Gemini)` $\rightarrow$ Lư đồng thời vào **Qdrant** (Vector) & **BM25** (Từ khóa).
 
-2. **Create a virtual environment**:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
-   ```
+### 2. Luồng Truy vấn (Agentic Query Pipeline)
+1. **User** gửi câu hỏi.
+2. **Router Agent** kiểm tra:
+   - Nếu là tán gẫu $\rightarrow$ Rẽ sang **Chat Node** $\rightarrow$ Trả lời kết thúc.
+   - Nếu là hỏi kiến thức $\rightarrow$ Rẽ sang **Researcher Node**.
+3. **Researcher Node** thực thi chuỗi lệnh:
+   - *Luồng chính*: Truy vấn Qdrant + Truy vấn BM25 $\rightarrow$ Trộn điểm (Ensemble).
+   - *Luồng phụ (Trigger)*: Nếu kết quả kém, tự động kích hoạt **HyDE**.
+   - *Hậu xử lý*: Nén (Compression) $\rightarrow$ Đảo vị trí (Reorder) $\rightarrow$ Xuất ra danh sách tài liệu cuối cùng.
+4. (Sắp ra mắt) **Critic / Generator Node**: Viết câu trả lời và tự động kiểm duyệt sự thật (Faithfulness) trước khi gửi cho User.
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+---
 
-4. **Configuration**:
-   Copy `.env.example` to `.env` and fill in your API keys:
-   ```bash
-   cp .env.example .env
-   ```
+## 📂 Cấu trúc dự án
 
-## 🏃 Running the Application
+```text
+academic chatbot/
+├── app/                  # FastAPI Application
+│   ├── api/              # Định nghĩa các endpoint (upload, search, chat)
+│   ├── settings.py       # Load config từ YAML & Biến môi trường
+│   └── main.py           # File khởi chạy server FastApi
+├── configs/              # Các file cấu hình hệ thống
+│   ├── app.yaml          # Tinh chỉnh thông số (chunk size, retriever weights, v.v.)
+│   └── ops.yaml
+├── core/                 # Thư viện dùng chung (Utilities)
+│   ├── chunking/         # Thuật toán cắt văn bản học thuật
+│   ├── embedding/        # Gọi API tạo Vector (Gemini)
+│   ├── parsing/          # Bóc tách PDF
+│   └── ocr.py            # OCR xử lý tài liệu ảnh
+├── lc/                   # LangChain & LangGraph Logic
+│   ├── agents/           # Node & Graph (Router, Researcher)
+│   ├── chains/           # Pipeline tìm kiếm (Ensemble, HyDE, Compression, Reorder)
+│   ├── retrievers/       # Khởi tạo thuật toán BM25 và Vector Search
+│   └── vectordb/         # Giao tiếp với cơ sở dữ liệu Qdrant
+├── eval/                 # Đánh giá tự động hệ thống (Baseline, Ragas)
+├── tests/                # Bộ Unit Test (pytest)
+├── artifacts/            # Lưu trữ file log, database BM25 cục bộ
+├── qdrant_local_db/      # Vector database cục bộ
+└── .env                  # Cấu hình Secret Keys (Google API, LangSmith)
+```
 
-### Start the API Backend
+---
+
+## ⚙️ Cài đặt & Cấu hình
+
+**1. Clone dự án & Cài đặt môi trường**
+```bash
+git clone <repository-url>
+cd "academic chatbot"
+
+# Tạo môi trường ảo
+python -m venv .venv
+
+# Activate môi trường
+# Trên Windows:
+.venv\Scripts\activate
+# Trên Linux/Mac:
+source .venv/bin/activate
+
+# Cài đặt thư viện
+pip install -r requirements.txt
+```
+
+**2. Cấu hình các biến môi trường (.env)**
+Tạo một file `.env` ở thư mục gốc chứa các thông tin sau:
+```env
+GOOGLE_API_KEY=your_gemini_api_key
+
+# Cấu hình LangSmith (Để giám sát hệ thống)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=your_langsmith_api_key
+LANGCHAIN_PROJECT=AURA-Academic-Bot
+```
+
+---
+
+## 🏃 Hướng dẫn chạy & Sử dụng
+
+### 1. Khởi động Backend API (FastAPI)
+Lõi hệ thống cung cấp API cho việc Upload tài liệu và hỏi đáp.
 ```bash
 uvicorn app.main:app --reload
 ```
-The API will be available at `http://localhost:8000`. Access the docs at `/docs`.
+- Mở URL: [http://localhost:8000/docs](http://localhost:8000/docs) để xem giao diện Swagger UI và gọi thử API.
 
-### Start the Gradio UI
+### 2. Chạy thử các Agent (Bản Console)
+Bạn có thể theo dõi luồng suy nghĩ của các Node (Router, Researcher) thông qua log console bằng file chạy trực tiếp:
 ```bash
-python ui/gradio_app.py
+python lc/agents/graph.py
 ```
-The UI will be available at `http://localhost:7860`.
 
-## 📂 Project Structure
+### 3. Chạy bộ Unit Test
+Xác nhận rằng toàn bộ module Retriever, Agent, Splitting hoạt động hoàn hảo:
+```bash
+pytest tests/ -v -s
+```
 
-- `app/`: FastAPI application (routes, schemas, middleware).
-- `core/`: Core logic for embeddings, retrieval, and LLM orchestration.
-- `ui/`: Gradio interface implementation.
-- `lc/`: LangChain specific components and prompts.
-- `data/`: Directory for source documents (excluded from Git).
-- `qdrant_local_db/`: Persistent storage for the vector database.
+---
 
-## 📄 License
-This project is for academic and research purposes.
+## 📄 Bản quyền
+Dự án được phát triển dưới dạng kiến trúc nâng cao (Advanced Agentic RAGOps). Vui lòng không sử dụng cho mục đích thương mại khi chưa được sự cho phép.
