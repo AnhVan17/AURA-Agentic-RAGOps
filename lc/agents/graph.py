@@ -1,30 +1,3 @@
-"""
-==========================================================
- AURA - Core Agent Graph (Ngày 9 → 12)
- LangGraph FSM với Self-Reflection Loop
-==========================================================
-
-Kiến trúc hoàn chỉnh:
-
-  START → [Router]
-             ├── "chat"   → [Chat Node] → END
-             └── "search" → [Researcher] → [Relevancy Grader]
-                                  ↑              │
-                                  │    "relevant" → [Generator] → [Critic]
-                                  │                                  │
-                                  │   ┌── "useful"  ─────────────── END
-                                  │   ├── "not_useful" ──────────────┘
-                                  │   │   (quay lại Researcher)
-                                  └───┘
-                                      └── "max_retries" ─── [Fallback] → END
-                                  │
-                                  └── "not_relevant" → [Fallback] → END
-
-Ngày 9-10: Router + Researcher
-Ngày 11:   Generator + Critic (Self-Reflection / LLM-as-a-Judge)
-Ngày 12:   Relevancy Grader (Kiểm tra tài liệu có liên quan không)
-"""
-
 import json
 import logging
 from typing import TypedDict, List, Dict, Any
@@ -43,16 +16,12 @@ MAX_CRITIC_ATTEMPTS = 3
 
 # 1. ĐỊNH NGHĨA STATE
 class GraphState(TypedDict):
-    """
-        critic_score    : "pass" hoặc "fail" — Kết quả chấm điểm của Critic.
-        critic_feedback : Lý do Critic đánh trượt (để Researcher/Generator cải thiện).
-        relevancy_score : "relevant" hoặc "not_relevant" — Tài liệu có liên quan không.
-    """
     question: str
     session_id: str
     context: List[Dict[str, Any]]
     context_text: str
     draft_answer: str
+    final_answer: str
     attempts: int
     next_action: str
     search_meta: Dict[str, Any]
@@ -122,7 +91,7 @@ def router_node(state: GraphState) -> dict:
     return {"next_action": action}
 
 
-# 4. RESEARCHER NODE (Ngày 10)
+# 4. RESEARCHER NODE 
 def researcher_node(state: GraphState) -> dict:
     """
     Gọi advanced_retrieve() từ Tuần 2 (BM25 + Qdrant + HyDE + Compression + Reorder).
@@ -270,7 +239,7 @@ def generator_node(state: GraphState) -> dict:
     return {"draft_answer": answer}
 
 
-# 7. CRITIC NODE (Ngày 11) 
+# 7. CRITIC NODE 
 CRITIC_PROMPT_TEMPLATE = """Bạn là GIÁM KHẢO NGHIÊM KHẮC trong hệ thống Chatbot Học thuật.
 
 NHIỆM VỤ: Kiểm tra xem CÂU TRẢ LỜI có TRUNG THÀNH (Faithful) với TÀI LIỆU không.
@@ -439,33 +408,53 @@ def relevancy_grader_node(state: GraphState) -> dict:
     return {"relevancy_score": score}
 
 
-# 9. FALLBACK NODE — Xin lỗi khi hết lượt retry hoặc context không liên quan
+# 9. FALLBACK NODE — Graceful Degradation 
 def fallback_node(state: GraphState) -> dict:
-    """Trả lời lịch sự khi Critic đánh trượt quá 3 lần hoặc context không liên quan."""
+    """
+    Xử lý mềm mỏng khi hệ thống thất bại. Phân biệt 3 loại lỗi:
+    1. Chưa upload tài liệu (session_id rỗng)
+    2. Tài liệu không liên quan (relevancy fail)
+    3. Hết lượt retry (critic fail x3)
+
+    Ngày 14: Thêm error_type vào State để hệ thống giám sát (LangSmith)
+    có thể phân loại lỗi tự động.
+    """
     attempts = state.get("attempts", 0)
     relevancy = state.get("relevancy_score", "")
+    session_id = state.get("session_id", "")
 
-    if relevancy == "not_relevant":
+    if not session_id:
+        error_type = "no_session"
+        logger.warning("[Fallback] Chưa có session_id → chưa upload tài liệu.")
+        msg = (
+            "Bạn chưa tải lên tài liệu nào. Vui lòng upload file PDF/DOCX trước, "
+            "sau đó đặt câu hỏi để tôi tra cứu giúp bạn."
+        )
+    elif relevancy == "not_relevant":
+        error_type = "not_relevant"
         logger.warning("[Fallback] Tài liệu không liên quan đến câu hỏi.")
         msg = (
-            "Xin lỗi bạn, tài liệu hiện có không chứa thông tin liên quan đến câu hỏi của bạn. "
-            "Vui lòng tải lên tài liệu phù hợp hoặc đặt lại câu hỏi cụ thể hơn."
+            "📄 Xin lỗi bạn, tài liệu hiện có không chứa thông tin liên quan "
+            "đến câu hỏi của bạn. Vui lòng tải lên tài liệu phù hợp hoặc "
+            "đặt lại câu hỏi cụ thể hơn."
         )
     else:
+        error_type = "max_retries"
         logger.warning(f"[Fallback] Hết {attempts} lần thử. Trả lời xin lỗi.")
         msg = (
-            "Xin lỗi bạn, sau nhiều lần tra cứu, tôi không thể tìm được thông tin "
-            "đáng tin cậy để trả lời câu hỏi này. Vui lòng thử hỏi lại với câu hỏi "
-            "cụ thể hơn, hoặc kiểm tra xem tài liệu đã được tải lên chưa."
+            "Xin lỗi bạn, sau nhiều lần tra cứu, tôi không thể tìm được "
+            "thông tin đáng tin cậy để trả lời câu hỏi này. Vui lòng thử hỏi "
+            "lại với câu hỏi cụ thể hơn, hoặc kiểm tra xem tài liệu đã được "
+            "tải lên chưa."
         )
 
     return {
         "draft_answer": msg,
-        "critic_score": "max_retries" if relevancy != "not_relevant" else "not_relevant",
+        "critic_score": error_type,
     }
 
 
-# 10. CONDITIONAL EDGES — Các hàm bẻ ghi đường ray
+# 10. CONDITIONAL EDGES 
 def route_decision(state: GraphState) -> str:
     """Router → 'search' hoặc 'chat'."""
     return state.get("next_action", "search")
@@ -507,36 +496,19 @@ def check_hallucination(state: GraphState) -> str:
         return "not_useful"
 
 
-# 11. BUILD GRAPH — Ráp nối toàn bộ thành FSM
+# 12. BUILD GRAPH — Ráp nối toàn bộ thành FSM
 def build_core_graph():
-    """
-    Xây dựng và compile LangGraph.
-
-    Sơ đồ:
-      START → router
-                ├── "chat"   → chat → END
-                └── "search" → researcher → relevancy_grader
-                                   ↑              │
-                                   │    "relevant" → generator → critic
-                                   │                                │
-                                   │    ┌── "useful" ────────────  END
-                                   │    ├── "not_useful" ───────────┘
-                                   │    │   (quay lại researcher)
-                                   └────┘
-                                        └── "max_retries" → fallback → END
-                                   │
-                                   └── "not_relevant" ────→ fallback → END
-    """
     workflow = StateGraph(GraphState)
 
     # ── Đăng ký tất cả các Node ──
-    workflow.add_node("router", router_node)            
-    workflow.add_node("researcher", researcher_node)      
-    workflow.add_node("chat", chat_node)                 
-    workflow.add_node("relevancy_grader", relevancy_grader_node)  
-    workflow.add_node("generator", generator_node)        
-    workflow.add_node("critic", critic_node)              
-    workflow.add_node("fallback", fallback_node)          
+    workflow.add_node("router", router_node)
+    workflow.add_node("researcher", researcher_node)
+    workflow.add_node("chat", chat_node)
+    workflow.add_node("relevancy_grader", relevancy_grader_node)
+    workflow.add_node("generator", generator_node)
+    workflow.add_node("critic", critic_node)
+    workflow.add_node("fallback", fallback_node)
+    workflow.add_node("formatter", formatter_node)
 
     # ── Entry Point ──
     workflow.set_entry_point("router")
@@ -548,10 +520,10 @@ def build_core_graph():
         {"search": "researcher", "chat": "chat"},
     )
 
-    # ── Chat → END ──
+    # ── Chat → END (không cần format vì chat trả lời đơn giản) ──
     workflow.add_edge("chat", END)
 
-    # ── Researcher → Relevancy Grader (Ngày 12) ──
+    # ── Researcher → Relevancy Grader ──
     workflow.add_edge("researcher", "relevancy_grader")
 
     # ── Relevancy Grader → (relevant | not_relevant) ──
@@ -559,8 +531,8 @@ def build_core_graph():
         "relevancy_grader",
         check_relevancy,
         {
-            "relevant": "generator",        # Tài liệu OK → viết nháp
-            "not_relevant": "fallback",     # Tài liệu lạc đề → xin lỗi
+            "relevant": "generator",
+            "not_relevant": "fallback",
         },
     )
 
@@ -572,14 +544,17 @@ def build_core_graph():
         "critic",
         check_hallucination,
         {
-            "useful": END,                 # Pass → Kết thúc thành công
-            "not_useful": "researcher",    # Fail → Vòng lặp quay lại tìm lại
-            "max_retries": "fallback",     # Hết lượt → Xin lỗi
+            "useful": "formatter",          # Pass → định dạng + trích dẫn
+            "not_useful": "researcher",     # Fail → vòng lặp
+            "max_retries": "fallback",      # Hết lượt → xin lỗi
         },
     )
 
-    # ── Fallback → END ──
-    workflow.add_edge("fallback", END)
+    # ── Fallback → Formatter (xin lỗi cũng cần format lịch sự) ──
+    workflow.add_edge("fallback", "formatter")
+
+    # ── Formatter → END ──
+    workflow.add_edge("formatter", END)
 
     return workflow.compile()
 
