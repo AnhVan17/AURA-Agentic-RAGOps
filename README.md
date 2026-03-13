@@ -31,9 +31,11 @@ Hệ thống vượt qua chuẩn RAG truyền thống bằng cách áp dụng ki
 Quá trình hoạt động của AURA chia thành 2 luồng chính:
 
 ### 1. Luồng Nập liệu (Ingestion Pipeline)
+
 `File PDF` $\rightarrow$ `Parsing/OCR` $\rightarrow$ `Academic Chunking (cắt theo heading)` $\rightarrow$ `Embedding (Gemini)` $\rightarrow$ Lư đồng thời vào **Qdrant** (Vector) & **BM25** (Từ khóa).
 
 ### 2. Luồng Truy vấn (Agentic Query Pipeline)
+
 1. **User** gửi câu hỏi.
 2. **Router Agent** kiểm tra:
    - Nếu là tán gẫu $\rightarrow$ Rẽ sang **Chat Node** $\rightarrow$ Trả lời kết thúc.
@@ -79,6 +81,7 @@ academic chatbot/
 ## ⚙️ Cài đặt & Cấu hình
 
 **1. Clone dự án & Cài đặt môi trường**
+
 ```bash
 git clone <repository-url>
 cd "academic chatbot"
@@ -98,6 +101,7 @@ pip install -r requirements.txt
 
 **2. Cấu hình các biến môi trường (.env)**
 Tạo một file `.env` ở thư mục gốc chứa các thông tin sau:
+
 ```env
 GOOGLE_API_KEY=your_gemini_api_key
 
@@ -113,25 +117,27 @@ LANGCHAIN_PROJECT=AURA-Academic-Bot
 ## 🏃 Hướng dẫn chạy & Sử dụng
 
 ### 1. Khởi động Backend API (FastAPI)
+
 Lõi hệ thống cung cấp API cho việc Upload tài liệu và hỏi đáp.
+
 ```bash
 uvicorn app.main:app --reload
 ```
+
 - Mở URL: [http://localhost:8000/docs](http://localhost:8000/docs) để xem giao diện Swagger UI và gọi thử API.
 
 ### 2. Chạy thử các Agent (Bản Console)
+
 Bạn có thể theo dõi luồng suy nghĩ của các Node (Router, Researcher) thông qua log console bằng file chạy trực tiếp:
+
 ```bash
 python lc/agents/graph.py
 ```
 
 ### 3. Chạy bộ Unit Test
+
 Xác nhận rằng toàn bộ module Retriever, Agent, Splitting hoạt động hoàn hảo:
+
 ```bash
 pytest tests/ -v -s
 ```
-
----
-
-## 📄 Bản quyền
-Dự án được phát triển dưới dạng kiến trúc nâng cao (Advanced Agentic RAGOps). Vui lòng không sử dụng cho mục đích thương mại khi chưa được sự cho phép.

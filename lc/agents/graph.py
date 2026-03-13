@@ -1,6 +1,33 @@
+"""
+==========================================================
+ AURA - Core Agent Graph (Ngày 9 → 12)
+ LangGraph FSM với Self-Reflection Loop
+==========================================================
+
+Kiến trúc hoàn chỉnh:
+
+  START → [Router]
+             ├── "chat"   → [Chat Node] → END
+             └── "search" → [Researcher] → [Relevancy Grader]
+                                  ↑              │
+                                  │    "relevant" → [Generator] → [Critic]
+                                  │                                  │
+                                  │   ┌── "useful"  ─────────────── END
+                                  │   ├── "not_useful" ──────────────┘
+                                  │   │   (quay lại Researcher)
+                                  └───┘
+                                      └── "max_retries" ─── [Fallback] → END
+                                  │
+                                  └── "not_relevant" → [Fallback] → END
+
+Ngày 9-10: Router + Researcher
+Ngày 11:   Generator + Critic (Self-Reflection / LLM-as-a-Judge)
+Ngày 12:   Relevancy Grader (Kiểm tra tài liệu có liên quan không)
+"""
+
 import json
 import logging
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, List, Dict, Any
 
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -10,23 +37,16 @@ from app.settings import APPSETTINGS
 
 logger = logging.getLogger(__name__)
 
+# Số lần tối đa cho vòng lặp Critic (chống Infinite Loop)
+MAX_CRITIC_ATTEMPTS = 3
 
 
-# 1. ĐỊNH NGHĨA STATE (Bộ nhớ trung tâm của Graph)
-
+# 1. ĐỊNH NGHĨA STATE
 class GraphState(TypedDict):
     """
-    Cuốn sổ tay truyền tay giữa các Node trong Graph.
-
-    Fields:
-        question     : Câu hỏi gốc của người dùng.
-        session_id   : ID phiên làm việc, dùng để truy vấn đúng Collection trên Qdrant / BM25.
-        context      : Danh sách tài liệu (dạng dict) mà Researcher tìm được.
-        context_text : Chuỗi text đã nối (join) sẵn, dùng trực tiếp cho prompt LLM.
-        draft_answer : Câu trả lời nháp (chat hoặc generator ghi vào).
-        attempts     : Số lần đã thử tìm kiếm (phòng trường hợp retry).
-        next_action  : Quyết định của Router ("search" hoặc "chat").
-        search_meta  : Metadata bổ sung từ quá trình tìm kiếm (hyde, compression, reorder info).
+        critic_score    : "pass" hoặc "fail" — Kết quả chấm điểm của Critic.
+        critic_feedback : Lý do Critic đánh trượt (để Researcher/Generator cải thiện).
+        relevancy_score : "relevant" hoặc "not_relevant" — Tài liệu có liên quan không.
     """
     question: str
     session_id: str
@@ -36,58 +56,51 @@ class GraphState(TypedDict):
     attempts: int
     next_action: str
     search_meta: Dict[str, Any]
+    critic_score: str
+    critic_feedback: str
+    relevancy_score: str
 
 
-
-# 2. KHỞI TẠO LLM DÙNG CHUNG
-def _get_llm() -> ChatGoogleGenerativeAI:
-    """Tạo LLM instance (lazy, tránh lỗi khi import nếu chưa có API key)."""
+# 2. KHỞI TẠO LLM
+def _get_llm(temperature: float = 0) -> ChatGoogleGenerativeAI:
+    """Tạo LLM instance. temperature=0 cho Router/Critic, >0 cho Generator."""
     return ChatGoogleGenerativeAI(
         model=APPSETTINGS.app.default_llm,
         google_api_key=APPSETTINGS.google_api_key,
-        temperature=0, 
+        temperature=temperature,
     )
 
 
-# 3. ROUTER NODE 
+# 3. ROUTER NODE (Ngày 9)
 ROUTER_PROMPT_TEMPLATE = """Bạn là Router điều hướng trong hệ thống Chatbot Học thuật tiếng Việt.
 
 NHIỆM VỤ: Phân loại câu hỏi của người dùng vào đúng 1 trong 2 loại:
-- "chat": Câu chào hỏi, tán gẫu, cảm ơn, lời khen, câu hỏi không cần tra cứu kiến thức (VD: "Xin chào", "Bạn là ai?", "Cảm ơn nhé").
-- "search": Câu hỏi yêu cầu kiến thức chuyên môn, định nghĩa, công thức, giải thích khái niệm, tìm thông tin sự thật (VD: "RAG là gì?", "Giải thích thuật toán Gradient Descent", "Cho tôi công thức tính đạo hàm").
+- "chat": Câu chào hỏi, tán gẫu, cảm ơn, lời khen, câu hỏi không cần tra cứu kiến thức.
+- "search": Câu hỏi yêu cầu kiến thức chuyên môn, định nghĩa, công thức, giải thích khái niệm.
 
 QUY TẮC:
-1. Nếu không chắc chắn → mặc định chọn "search" (an toàn hơn).
+1. Nếu không chắc chắn → mặc định chọn "search".
 2. Chỉ trả về đúng 1 chuỗi JSON, KHÔNG giải thích thêm.
 
-ĐỊNH DẠNG TRẢ VỀ BẮT BUỘC (chỉ 1 dòng JSON duy nhất):
+ĐỊNH DẠNG BẮT BUỘC:
 {{"action": "search"}} hoặc {{"action": "chat"}}
 
 Câu hỏi: {question}"""
 
 
 def router_node(state: GraphState) -> dict:
-    """
-    Phân loại câu hỏi → quyết định next_action = "search" hoặc "chat".
-    
-    Cách hoạt động:
-    1. Lấy question từ State.
-    2. Gửi prompt cho LLM với temperature=0 (ổn định).
-    3. Ép LLM trả về JSON: {"action": "search"} hoặc {"action": "chat"}.
-    4. Parse JSON → ghi vào next_action trong State.
-    5. Nếu lỗi parse → fallback an toàn sang "search".
-    """
+    """Phân loại câu hỏi → next_action = 'search' hoặc 'chat'."""
     question = state.get("question", "")
-    logger.info(f"[Router] Phân tích câu hỏi: '{question[:80]}...'")
+    logger.info(f"[Router] Phân tích: '{question[:80]}...'")
 
     prompt = ROUTER_PROMPT_TEMPLATE.format(question=question)
 
     try:
-        llm = _get_llm()
+        llm = _get_llm(temperature=0)
         response = llm.invoke([HumanMessage(content=prompt)])
         content = response.content.strip()
 
-        # Xóa markdown wrapper nếu LLM tự thêm ```json ... ```
+        # Xóa markdown wrapper
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -98,48 +111,39 @@ def router_node(state: GraphState) -> dict:
 
         result = json.loads(content)
         action = result.get("action", "search")
-
-        # Validate: chỉ chấp nhận "search" hoặc "chat"
         if action not in ("search", "chat"):
-            logger.warning(f"[Router] Action không hợp lệ: '{action}'. Fallback → 'search'")
             action = "search"
 
-    except json.JSONDecodeError as e:
-        logger.error(f"[Router] Không parse được JSON từ LLM: {content!r}. Error: {e}")
-        action = "search"
     except Exception as e:
-        logger.error(f"[Router] Lỗi không mong muốn: {e}. Fallback → 'search'")
+        logger.error(f"[Router] Lỗi: {e}. Fallback → 'search'")
         action = "search"
 
-    logger.info(f"[Router] Quyết định: '{action}'")
+    logger.info(f"[Router] → '{action}'")
     return {"next_action": action}
 
 
-# 4. RESEARCHER NODE 
+# 4. RESEARCHER NODE (Ngày 10)
 def researcher_node(state: GraphState) -> dict:
     """
-    Kích hoạt toàn bộ pipeline Retrieval của Tuần 2 để tìm tài liệu.
-    
-    Cách hoạt động:
-    1. Lấy question + session_id từ State.
-    2. Gọi advanced_retrieve() — hàm đã gói gọn:
-       - Dense search (Qdrant vector similarity)
-       - Sparse search (BM25 keyword matching)
-       - Ensemble Merge (trộn điểm Min-Max)
-       - HyDE (Hypothetical Document Embedding — nếu kết quả ban đầu kém)
-       - Compression (Regex lọc bỏ câu thừa, giảm token)
-       - Reorder (Sắp xếp ngắn→dài theo heading)
-    3. Nhét kết quả vào context (list docs) + context_text (chuỗi join sẵn).
-    4. Lưu metadata (HyDE có dùng không, compression ratio...) vào search_meta.
+    Gọi advanced_retrieve() từ Tuần 2 (BM25 + Qdrant + HyDE + Compression + Reorder).
+    Nếu đang bị Critic đánh trượt (attempts > 1), log lại feedback để debug.
     """
     question = state.get("question", "")
     session_id = state.get("session_id", "")
     attempts = state.get("attempts", 0)
+    critic_feedback = state.get("critic_feedback", "")
 
-    logger.info(f"[Researcher] Tìm kiếm tài liệu cho session='{session_id}', q='{question[:80]}...'")
+    # Log nếu đang retry do Critic đánh trượt
+    if attempts > 0 and critic_feedback:
+        logger.warning(
+            f"[Researcher] ĐÃ BỊ CRITIC ĐÁNH TRƯỢT (lần {attempts}). "
+            f"Feedback: '{critic_feedback[:100]}...'. Đang tìm lại..."
+        )
+
+    logger.info(f"[Researcher] Tìm kiếm lần {attempts + 1} cho session='{session_id}'")
 
     if not session_id:
-        logger.error("[Researcher] Thiếu session_id! Không thể truy vấn.")
+        logger.error("[Researcher] Thiếu session_id!")
         return {
             "context": [],
             "context_text": "",
@@ -148,7 +152,6 @@ def researcher_node(state: GraphState) -> dict:
         }
 
     try:
-        # Import hàm siêu cấp từ Tuần 2
         from lc.chains.context_build import advanced_retrieve
 
         result = advanced_retrieve(
@@ -160,10 +163,8 @@ def researcher_node(state: GraphState) -> dict:
             use_reorder=APPSETTINGS.reorder.enable,
         )
 
-        # Trích xuất kết quả
         docs = result.get("docs", [])
         context_text = result.get("context_joined", "")
-
         search_meta = {
             "hyde": result.get("hyde", {}),
             "compression": result.get("compression", {}),
@@ -171,11 +172,7 @@ def researcher_node(state: GraphState) -> dict:
             "total_docs_found": len(docs),
         }
 
-        logger.info(
-            f"[Researcher] Tìm được {len(docs)} tài liệu. "
-            f"HyDE={'có' if search_meta['hyde'].get('used') else 'không'}, "
-            f"Compression ratio={search_meta['compression'].get('ratio', 0)}"
-        )
+        logger.info(f"[Researcher] Tìm được {len(docs)} tài liệu.")
 
     except Exception as e:
         logger.error(f"[Researcher] Pipeline lỗi: {e}", exc_info=True)
@@ -192,7 +189,6 @@ def researcher_node(state: GraphState) -> dict:
 
 
 # 5. CHAT NODE 
-
 CHAT_PROMPT_TEMPLATE = """Bạn là trợ lý học thuật thân thiện, hỗ trợ sinh viên Việt Nam.
 Hãy trả lời câu hỏi xã giao sau một cách ngắn gọn, lịch sự, bằng tiếng Việt.
 Giới thiệu bản thân là "AURA - Trợ lý Học thuật Thông minh".
@@ -201,114 +197,390 @@ Câu hỏi: {question}"""
 
 
 def chat_node(state: GraphState) -> dict:
-    """
-    Xử lý câu hỏi tán gẫu / xã giao.
-    Gọi LLM trả lời đơn giản, không cần tìm tài liệu.
-    """
+    """Trả lời câu hỏi tán gẫu / xã giao."""
     question = state.get("question", "")
-    logger.info(f"[Chat] Trả lời câu hỏi xã giao: '{question[:80]}...'")
+    logger.info(f"[Chat] Trả lời xã giao: '{question[:80]}...'")
 
     try:
-        llm = _get_llm()
+        llm = _get_llm(temperature=0.7)
         prompt = CHAT_PROMPT_TEMPLATE.format(question=question)
         response = llm.invoke([HumanMessage(content=prompt)])
         answer = response.content.strip()
     except Exception as e:
-        logger.error(f"[Chat] Lỗi LLM: {e}")
+        logger.error(f"[Chat] Lỗi: {e}")
         answer = "Xin chào! Tôi là AURA — Trợ lý Học thuật. Bạn cần giúp gì?"
 
     return {"draft_answer": answer}
 
 
+# 6. GENERATOR NODE 
+GENERATOR_PROMPT_TEMPLATE = """Bạn là trợ lý học thuật AURA. Nhiệm vụ: Viết câu trả lời DỰA HOÀN TOÀN vào tài liệu được cung cấp.
 
-# 6. CONDITIONAL EDGE — Hàm bẻ ghi đường ray
+QUY TẮC TUYỆT ĐỐI:
+1. CHỈ sử dụng thông tin có trong TÀI LIỆU bên dưới. TUYỆT ĐỐI KHÔNG bịa thêm.
+2. Nếu TÀI LIỆU không đủ để trả lời → hãy nói rõ "Tài liệu chưa đề cập đến nội dung này."
+3. Trả lời bằng tiếng Việt, rõ ràng, súc tích, phong cách học thuật.
+4. Nếu có công thức toán → giữ nguyên ký hiệu gốc từ tài liệu.
 
+TÀI LIỆU:
+---
+{context}
+---
+
+CÂU HỎI: {question}
+
+CÂU TRẢ LỜI:"""
+
+
+def generator_node(state: GraphState) -> dict:
+    """
+    Đọc context_text + question → viết draft_answer.
+
+    Cách hoạt động:
+    1. Lấy context_text (tài liệu đã nén từ Researcher) và question từ State.
+    2. Xây prompt ép LLM chỉ dùng tài liệu, cấm bịa.
+    3. Ghi câu trả lời vào draft_answer.
+    """
+    question = state.get("question", "")
+    context_text = state.get("context_text", "")
+    attempts = state.get("attempts", 0)
+
+    logger.info(f"[Generator] Viết nháp (lần {attempts}), context={len(context_text)} chars")
+
+    # Nếu không có context → ghi rõ lý do
+    if not context_text.strip():
+        logger.warning("[Generator] Context rỗng, không có tài liệu để viết.")
+        return {
+            "draft_answer": "Xin lỗi, tôi không tìm thấy tài liệu liên quan để trả lời câu hỏi này."
+        }
+
+    try:
+        llm = _get_llm(temperature=0.3)  # Sáng tạo nhẹ nhưng vẫn bám sát tài liệu
+        prompt = GENERATOR_PROMPT_TEMPLATE.format(
+            context=context_text,
+            question=question,
+        )
+        response = llm.invoke([HumanMessage(content=prompt)])
+        answer = response.content.strip()
+        logger.info(f"[Generator] Viết nháp xong: {len(answer)} chars")
+    except Exception as e:
+        logger.error(f"[Generator] Lỗi LLM: {e}")
+        answer = "Đã có lỗi khi tạo câu trả lời. Vui lòng thử lại."
+
+    return {"draft_answer": answer}
+
+
+# 7. CRITIC NODE (Ngày 11) 
+CRITIC_PROMPT_TEMPLATE = """Bạn là GIÁM KHẢO NGHIÊM KHẮC trong hệ thống Chatbot Học thuật.
+
+NHIỆM VỤ: Kiểm tra xem CÂU TRẢ LỜI có TRUNG THÀNH (Faithful) với TÀI LIỆU không.
+
+TIÊU CHÍ ĐÁNH GIÁ:
+1. Mỗi khẳng định (claim) trong CÂU TRẢ LỜI phải có cơ sở từ TÀI LIỆU.
+2. Nếu CÂU TRẢ LỜI chứa sự kiện, con số, định nghĩa KHÔNG THỂ suy ra từ TÀI LIỆU → FAIL.
+3. Nếu CÂU TRẢ LỜI chỉ diễn đạt lại (paraphrase) nội dung TÀI LIỆU → PASS.
+4. Nếu CÂU TRẢ LỜI nói "không tìm thấy tài liệu" hoặc từ chối trả lời → PASS (trung thực).
+
+TÀI LIỆU:
+---
+{context}
+---
+
+CÂU TRẢ LỜI CẦN KIỂM TRA:
+---
+{answer}
+---
+
+TRẢ VỀ ĐÚNG 1 CHUỖI JSON DUY NHẤT (KHÔNG giải thích thêm):
+{{"score": "pass", "reason": "lý do ngắn gọn"}}
+hoặc
+{{"score": "fail", "reason": "chỉ rõ khẳng định nào bịa đặt"}}"""
+
+
+def critic_node(state: GraphState) -> dict:
+    """
+    Quan Tòa kiểm duyệt: Đối chiếu draft_answer với context_text.
+
+    Cách hoạt động:
+    1. Nhận draft_answer và context_text từ State.
+    2. Gửi prompt "LLM-as-a-Judge" với temperature=0 (cực kỳ máy móc).
+    3. Ép LLM trả về JSON: {"score": "pass/fail", "reason": "..."}.
+    4. Ghi kết quả vào critic_score và critic_feedback.
+    5. Nếu lỗi parse JSON → mặc định PASS (an toàn, tránh infinite loop).
+    """
+    draft_answer = state.get("draft_answer", "")
+    context_text = state.get("context_text", "")
+    attempts = state.get("attempts", 0)
+
+    logger.info(f"[Critic] Kiểm duyệt câu trả lời (attempt={attempts})...")
+
+    # Nếu context rỗng và answer đã từ chối → auto pass
+    if not context_text.strip():
+        logger.info("[Critic] Context rỗng → auto PASS (không có gì để so sánh)")
+        return {"critic_score": "pass", "critic_feedback": "Context rỗng, answer đã từ chối đúng."}
+
+    try:
+        llm = _get_llm(temperature=0)  # Temperature = 0: Quan Tòa không được du di
+        prompt = CRITIC_PROMPT_TEMPLATE.format(
+            context=context_text,
+            answer=draft_answer,
+        )
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = response.content.strip()
+
+        # Xóa markdown wrapper
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+
+        result = json.loads(content)
+        score = result.get("score", "pass").lower()
+        reason = result.get("reason", "")
+
+        if score not in ("pass", "fail"):
+            logger.warning(f"[Critic] Score không hợp lệ: '{score}'. Default → 'pass'")
+            score = "pass"
+
+    except json.JSONDecodeError as e:
+        logger.error(f"[Critic] Không parse được JSON: {content!r}. Error: {e}. Default → 'pass'")
+        score = "pass"
+        reason = f"JSON parse error, default pass. Raw: {content[:100]}"
+    except Exception as e:
+        logger.error(f"[Critic] Lỗi: {e}. Default → 'pass'")
+        score = "pass"
+        reason = str(e)
+
+    logger.info(f"[Critic] Kết quả: {score.upper()} | Reason: {reason[:100]}")
+    return {"critic_score": score, "critic_feedback": reason}
+
+
+# 8. RELEVANCY GRADER NODE  — Kiểm tra Context có liên quan không
+RELEVANCY_PROMPT_TEMPLATE = """Bạn là GIÁM KHẢO ĐÁNH GIÁ ĐỘ LIÊN QUAN trong hệ thống Chatbot Học thuật.
+
+NHIỆM VỤ: Đánh giá xem TÀI LIỆU có chứa thông tin để trả lời CÂU HỎI hay không.
+
+TIÊU CHÍ:
+1. Nếu TÀI LIỆU có chứa ít nhất 1 thông tin trực tiếp liên quan đến CÂU HỎI → "relevant".
+2. Nếu TÀI LIỆU hoàn toàn không liên quan, lạc đề, hoặc rỗng → "not_relevant".
+3. Không cần TÀI LIỆU trả lời hoàn chỉnh, chỉ cần có nội dung liên quan là đủ.
+
+TÀI LIỆU:
+---
+{context}
+---
+
+CÂU HỎI: {question}
+
+TRẢ VỀ ĐÚNG 1 CHUỖI JSON DUY NHẤT:
+{{"score": "relevant", "reason": "lý do ngắn gọn"}}
+hoặc
+{{"score": "not_relevant", "reason": "lý do ngắn gọn"}}"""
+
+
+def relevancy_grader_node(state: GraphState) -> dict:
+    """
+    Kiểm tra tài liệu Researcher tìm được có liên quan đến câu hỏi không.
+
+    Ngày 12 — Lớp kiểm duyệt thứ 2:
+    - Ngày 11: Critic kiểm tra "câu trả lời có bịa không" (sau Generator).
+    - Ngày 12: Relevancy kiểm tra "tài liệu có đúng chủ đề không" (trước Generator).
+
+    Cách hoạt động:
+    1. Nhận context_text + question từ State.
+    2. Gửi prompt cho LLM (temperature=0) đánh giá độ liên quan.
+    3. Nếu "relevant" → tiếp tục sang Generator.
+    4. Nếu "not_relevant" → nhảy sang Fallback (tránh viết nhảm).
+    """
+    question = state.get("question", "")
+    context_text = state.get("context_text", "")
+
+    logger.info(f"[Relevancy] Đánh giá độ liên quan context ({len(context_text)} chars) vs câu hỏi...")
+
+    # Context rỗng → chắc chắn không liên quan
+    if not context_text.strip():
+        logger.warning("[Relevancy] Context rỗng → not_relevant")
+        return {"relevancy_score": "not_relevant"}
+
+    try:
+        llm = _get_llm(temperature=0)
+        prompt = RELEVANCY_PROMPT_TEMPLATE.format(
+            context=context_text[:3000],  # Giới hạn context gửi cho Grader để tiết kiệm token
+            question=question,
+        )
+        response = llm.invoke([HumanMessage(content=prompt)])
+        content = response.content.strip()
+
+        # Xóa markdown wrapper
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+
+        result = json.loads(content)
+        score = result.get("score", "relevant").lower()
+        reason = result.get("reason", "")
+
+        if score not in ("relevant", "not_relevant"):
+            score = "relevant"  # Default an toàn: cho qua
+
+    except Exception as e:
+        logger.error(f"[Relevancy] Lỗi: {e}. Default → 'relevant'")
+        score = "relevant"
+        reason = str(e)
+
+    logger.info(f"[Relevancy] → {score.upper()} | {reason[:100]}")
+    return {"relevancy_score": score}
+
+
+# 9. FALLBACK NODE — Xin lỗi khi hết lượt retry hoặc context không liên quan
+def fallback_node(state: GraphState) -> dict:
+    """Trả lời lịch sự khi Critic đánh trượt quá 3 lần hoặc context không liên quan."""
+    attempts = state.get("attempts", 0)
+    relevancy = state.get("relevancy_score", "")
+
+    if relevancy == "not_relevant":
+        logger.warning("[Fallback] Tài liệu không liên quan đến câu hỏi.")
+        msg = (
+            "Xin lỗi bạn, tài liệu hiện có không chứa thông tin liên quan đến câu hỏi của bạn. "
+            "Vui lòng tải lên tài liệu phù hợp hoặc đặt lại câu hỏi cụ thể hơn."
+        )
+    else:
+        logger.warning(f"[Fallback] Hết {attempts} lần thử. Trả lời xin lỗi.")
+        msg = (
+            "Xin lỗi bạn, sau nhiều lần tra cứu, tôi không thể tìm được thông tin "
+            "đáng tin cậy để trả lời câu hỏi này. Vui lòng thử hỏi lại với câu hỏi "
+            "cụ thể hơn, hoặc kiểm tra xem tài liệu đã được tải lên chưa."
+        )
+
+    return {
+        "draft_answer": msg,
+        "critic_score": "max_retries" if relevancy != "not_relevant" else "not_relevant",
+    }
+
+
+# 10. CONDITIONAL EDGES — Các hàm bẻ ghi đường ray
 def route_decision(state: GraphState) -> str:
-    """Đọc next_action trong State để quyết định rẽ nhánh."""
+    """Router → 'search' hoặc 'chat'."""
     return state.get("next_action", "search")
 
 
-# 7. BUILD GRAPH — Ráp nối toàn bộ thành FSM
+def check_relevancy(state: GraphState) -> str:
+    """
+    Ngày 12: Kiểm tra kết quả Relevancy Grader.
+      - "relevant"     : Tài liệu liên quan → cho Generator viết.
+      - "not_relevant" : Tài liệu lạc đề → nhảy Fallback.
+    """
+    score = state.get("relevancy_score", "relevant")
+    if score == "relevant":
+        logger.info("[Decision] Relevancy PASS → tiến tới Generator.")
+        return "relevant"
+    else:
+        logger.warning("[Decision] Relevancy FAIL → Fallback (tài liệu không liên quan).")
+        return "not_relevant"
 
-def build_core_graph() -> Any:
+
+def check_hallucination(state: GraphState) -> str:
+    """
+    Ngày 11: Kiểm tra kết quả Critic Node.
+      - "useful"      : Đáp án trung thực → END.
+      - "not_useful"  : Đáp án bịa đặt, còn lượt → quay lại Researcher.
+      - "max_retries" : Hết lượt → Fallback.
+    """
+    score = state.get("critic_score", "pass")
+    attempts = state.get("attempts", 0)
+
+    if score == "pass":
+        logger.info("[Decision] Critic PASS → Kết thúc thành công.")
+        return "useful"
+    elif attempts >= MAX_CRITIC_ATTEMPTS:
+        logger.warning(f"[Decision] Critic FAIL & đã hết {MAX_CRITIC_ATTEMPTS} lượt → Fallback.")
+        return "max_retries"
+    else:
+        logger.warning(f"[Decision] Critic FAIL (lần {attempts}) → Quay lại Researcher.")
+        return "not_useful"
+
+
+# 11. BUILD GRAPH — Ráp nối toàn bộ thành FSM
+def build_core_graph():
     """
     Xây dựng và compile LangGraph.
-    
+
     Sơ đồ:
-        START → router
-                  ├── "chat"   → chat_node   → END
-                  └── "search" → researcher  → END
-    
-    Returns:
-        CompiledGraph — có thể gọi .invoke(state) trực tiếp.
+      START → router
+                ├── "chat"   → chat → END
+                └── "search" → researcher → relevancy_grader
+                                   ↑              │
+                                   │    "relevant" → generator → critic
+                                   │                                │
+                                   │    ┌── "useful" ────────────  END
+                                   │    ├── "not_useful" ───────────┘
+                                   │    │   (quay lại researcher)
+                                   └────┘
+                                        └── "max_retries" → fallback → END
+                                   │
+                                   └── "not_relevant" ────→ fallback → END
     """
     workflow = StateGraph(GraphState)
 
-    # Đăng ký các Node
-    workflow.add_node("router", router_node)
-    workflow.add_node("researcher", researcher_node)
-    workflow.add_node("chat", chat_node)
+    # ── Đăng ký tất cả các Node ──
+    workflow.add_node("router", router_node)            
+    workflow.add_node("researcher", researcher_node)      
+    workflow.add_node("chat", chat_node)                 
+    workflow.add_node("relevancy_grader", relevancy_grader_node)  
+    workflow.add_node("generator", generator_node)        
+    workflow.add_node("critic", critic_node)              
+    workflow.add_node("fallback", fallback_node)          
 
-    # Thiết lập Entry Point (Điểm bắt đầu luôn là Router)
+    # ── Entry Point ──
     workflow.set_entry_point("router")
 
-    # Conditional Edge: Router → (search | chat)
+    # ── Router → (search | chat) ──
     workflow.add_conditional_edges(
         "router",
         route_decision,
+        {"search": "researcher", "chat": "chat"},
+    )
+
+    # ── Chat → END ──
+    workflow.add_edge("chat", END)
+
+    # ── Researcher → Relevancy Grader (Ngày 12) ──
+    workflow.add_edge("researcher", "relevancy_grader")
+
+    # ── Relevancy Grader → (relevant | not_relevant) ──
+    workflow.add_conditional_edges(
+        "relevancy_grader",
+        check_relevancy,
         {
-            "search": "researcher",
-            "chat": "chat",
+            "relevant": "generator",        # Tài liệu OK → viết nháp
+            "not_relevant": "fallback",     # Tài liệu lạc đề → xin lỗi
         },
     )
 
-    # Terminal Edges: Cả hai nhánh đều kết thúc
-    workflow.add_edge("researcher", END)
-    workflow.add_edge("chat", END)
+    # ── Generator → Critic ──
+    workflow.add_edge("generator", "critic")
+
+    # ── Critic → (useful | not_useful | max_retries) ──
+    workflow.add_conditional_edges(
+        "critic",
+        check_hallucination,
+        {
+            "useful": END,                 # Pass → Kết thúc thành công
+            "not_useful": "researcher",    # Fail → Vòng lặp quay lại tìm lại
+            "max_retries": "fallback",     # Hết lượt → Xin lỗi
+        },
+    )
+
+    # ── Fallback → END ──
+    workflow.add_edge("fallback", END)
 
     return workflow.compile()
 
 
-
-# 8. TEST CHẠY THỬ
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-
-    graph = build_core_graph()
-
-    # --- Test 1: Câu hỏi tán gẫu ---
-    print("\n" + "=" * 60)
-    print("TEST 1: Câu hỏi tán gẫu")
-    print("=" * 60)
-    state_chat = {
-        "question": "Chào buổi sáng! Bạn khỏe không?",
-        "session_id": "",
-        "context": [],
-        "context_text": "",
-        "draft_answer": "",
-        "attempts": 0,
-        "next_action": "",
-        "search_meta": {},
-    }
-    result_chat = graph.invoke(state_chat)
-    print(f"  → Action:  {result_chat['next_action']}")
-    print(f"  → Answer:  {result_chat['draft_answer'][:200]}")
-
-    # --- Test 2: Câu hỏi kiến thức (cần session_id thật để chạy Retriever) ---
-    print("\n" + "=" * 60)
-    print("TEST 2: Câu hỏi kiến thức (không có session → sẽ báo lỗi nhẹ)")
-    print("=" * 60)
-    state_search = {
-        "question": "Giải thích khái niệm Gradient Descent trong Machine Learning?",
-        "session_id": "",  # Để trống → Researcher sẽ báo lỗi nhẹ
-        "context": [],
-        "context_text": "",
-        "draft_answer": "",
-        "attempts": 0,
-        "next_action": "",
-        "search_meta": {},
-    }
-    result_search = graph.invoke(state_search)
-    print(f"  → Action:       {result_search['next_action']}")
-    print(f"  → Docs found:   {len(result_search['context'])}")
-    print(f"  → Search meta:  {result_search['search_meta']}")
