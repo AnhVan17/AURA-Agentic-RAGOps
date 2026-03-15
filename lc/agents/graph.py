@@ -4,6 +4,7 @@ from typing import TypedDict, List, Dict, Any
 
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 from app.settings import APPSETTINGS
@@ -31,11 +32,27 @@ class GraphState(TypedDict):
 
 
 # 2. KHỞI TẠO LLM
-def _get_llm(temperature: float = 0) -> ChatGoogleGenerativeAI:
-    """Tạo LLM instance. temperature=0 cho Router/Critic, >0 cho Generator."""
+def _get_llm(temperature: float = 0) -> Any:
+    """
+    Tạo LLM instance thông qua Model Gateway (LiteLLM) hoặc gọi trực tiếp.
+    
+    Ngày 15-16: Tích hợp LiteLLM làm Proxy. 
+    Lợi ích: Tự động Fallback khi Gemini hết Rate Limit.
+    """
+    # Nếu dùng LiteLLM Proxy (Chạy docker ở localhost:4000)
+    if getattr(APPSETTINGS, "USE_LITELLM_PROXY", False):
+        logger.info(f"Using LiteLLM Model Gateway (temp={temperature})")
+        return ChatOpenAI(
+            model="aura-llm-primary", # Tên model định nghĩa trong litellm_config.yaml
+            api_key="sk-1234",        # Master key của proxy
+            base_url="http://localhost:4000",
+            temperature=temperature
+        )
+    
+    # Mặc định gọi trực tiếp Gemini (Legacy)
     return ChatGoogleGenerativeAI(
-        model=APPSETTINGS.app.default_llm,
-        google_api_key=APPSETTINGS.google_api_key,
+        model="gemini-1.5-flash",
+        google_api_key=APPSETTINGS.GOOGLE_API_KEY,
         temperature=temperature,
     )
 

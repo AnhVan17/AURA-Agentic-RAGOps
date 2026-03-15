@@ -1,0 +1,17 @@
+model_list:
+  - model_name: aura-llm-primary
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: "os.environ/GOOGLE_API_KEY"
+    
+  - model_name: aura-llm-fallback
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: "os.environ/OPENAI_API_KEY"
+
+router_settings:
+  routing_strategy: simple-shuffle # Hoặc 'latency-based-routing' nếu có nhiều model
+  set_verbose: True
+
+general_settings:
+  master_key: "sk-1234" # Key để quản trị proxy nếu cần
