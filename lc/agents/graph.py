@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 from app.settings import APPSETTINGS
+from lc.prompts.templates import get_prompt_text  # Ngày 17: PromptOps
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,6 @@ class GraphState(TypedDict):
 
 # 2. KHỞI TẠO LLM
 def _get_llm(temperature: float = 0) -> Any:
-    """
-    Tạo LLM instance thông qua Model Gateway (LiteLLM) hoặc gọi trực tiếp.
-    
-    Ngày 15-16: Tích hợp LiteLLM làm Proxy. 
-    Lợi ích: Tự động Fallback khi Gemini hết Rate Limit.
-    """
     # Nếu dùng LiteLLM Proxy (Chạy docker ở localhost:4000)
     if getattr(APPSETTINGS, "USE_LITELLM_PROXY", False):
         logger.info(f"Using LiteLLM Model Gateway (temp={temperature})")
@@ -51,27 +46,15 @@ def _get_llm(temperature: float = 0) -> Any:
     
     # Mặc định gọi trực tiếp Gemini (Legacy)
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=APPSETTINGS.GOOGLE_API_KEY,
         temperature=temperature,
     )
 
 
 # 3. ROUTER NODE (Ngày 9)
-ROUTER_PROMPT_TEMPLATE = """Bạn là Router điều hướng trong hệ thống Chatbot Học thuật tiếng Việt.
-
-NHIỆM VỤ: Phân loại câu hỏi của người dùng vào đúng 1 trong 2 loại:
-- "chat": Câu chào hỏi, tán gẫu, cảm ơn, lời khen, câu hỏi không cần tra cứu kiến thức.
-- "search": Câu hỏi yêu cầu kiến thức chuyên môn, định nghĩa, công thức, giải thích khái niệm.
-
-QUY TẮC:
-1. Nếu không chắc chắn → mặc định chọn "search".
-2. Chỉ trả về đúng 1 chuỗi JSON, KHÔNG giải thích thêm.
-
-ĐỊNH DẠNG BẮT BUỘC:
-{{"action": "search"}} hoặc {{"action": "chat"}}
-
-Câu hỏi: {question}"""
+# Ngày 17: Prompt đã được tách sang lc/prompts/templates.py (PromptOps)
+ROUTER_PROMPT_TEMPLATE = get_prompt_text("router")
 
 
 def router_node(state: GraphState) -> dict:
@@ -175,11 +158,8 @@ def researcher_node(state: GraphState) -> dict:
 
 
 # 5. CHAT NODE 
-CHAT_PROMPT_TEMPLATE = """Bạn là trợ lý học thuật thân thiện, hỗ trợ sinh viên Việt Nam.
-Hãy trả lời câu hỏi xã giao sau một cách ngắn gọn, lịch sự, bằng tiếng Việt.
-Giới thiệu bản thân là "AURA - Trợ lý Học thuật Thông minh".
-
-Câu hỏi: {question}"""
+# Ngày 17: Prompt đã được tách sang lc/prompts/templates.py (PromptOps)
+CHAT_PROMPT_TEMPLATE = get_prompt_text("chat")
 
 
 def chat_node(state: GraphState) -> dict:
@@ -200,22 +180,8 @@ def chat_node(state: GraphState) -> dict:
 
 
 # 6. GENERATOR NODE 
-GENERATOR_PROMPT_TEMPLATE = """Bạn là trợ lý học thuật AURA. Nhiệm vụ: Viết câu trả lời DỰA HOÀN TOÀN vào tài liệu được cung cấp.
-
-QUY TẮC TUYỆT ĐỐI:
-1. CHỈ sử dụng thông tin có trong TÀI LIỆU bên dưới. TUYỆT ĐỐI KHÔNG bịa thêm.
-2. Nếu TÀI LIỆU không đủ để trả lời → hãy nói rõ "Tài liệu chưa đề cập đến nội dung này."
-3. Trả lời bằng tiếng Việt, rõ ràng, súc tích, phong cách học thuật.
-4. Nếu có công thức toán → giữ nguyên ký hiệu gốc từ tài liệu.
-
-TÀI LIỆU:
----
-{context}
----
-
-CÂU HỎI: {question}
-
-CÂU TRẢ LỜI:"""
+# Ngày 17: Prompt đã được tách sang lc/prompts/templates.py (PromptOps)
+GENERATOR_PROMPT_TEMPLATE = get_prompt_text("generator")
 
 
 def generator_node(state: GraphState) -> dict:
@@ -257,30 +223,8 @@ def generator_node(state: GraphState) -> dict:
 
 
 # 7. CRITIC NODE 
-CRITIC_PROMPT_TEMPLATE = """Bạn là GIÁM KHẢO NGHIÊM KHẮC trong hệ thống Chatbot Học thuật.
-
-NHIỆM VỤ: Kiểm tra xem CÂU TRẢ LỜI có TRUNG THÀNH (Faithful) với TÀI LIỆU không.
-
-TIÊU CHÍ ĐÁNH GIÁ:
-1. Mỗi khẳng định (claim) trong CÂU TRẢ LỜI phải có cơ sở từ TÀI LIỆU.
-2. Nếu CÂU TRẢ LỜI chứa sự kiện, con số, định nghĩa KHÔNG THỂ suy ra từ TÀI LIỆU → FAIL.
-3. Nếu CÂU TRẢ LỜI chỉ diễn đạt lại (paraphrase) nội dung TÀI LIỆU → PASS.
-4. Nếu CÂU TRẢ LỜI nói "không tìm thấy tài liệu" hoặc từ chối trả lời → PASS (trung thực).
-
-TÀI LIỆU:
----
-{context}
----
-
-CÂU TRẢ LỜI CẦN KIỂM TRA:
----
-{answer}
----
-
-TRẢ VỀ ĐÚNG 1 CHUỖI JSON DUY NHẤT (KHÔNG giải thích thêm):
-{{"score": "pass", "reason": "lý do ngắn gọn"}}
-hoặc
-{{"score": "fail", "reason": "chỉ rõ khẳng định nào bịa đặt"}}"""
+# Ngày 17: Prompt đã được tách sang lc/prompts/templates.py (PromptOps)
+CRITIC_PROMPT_TEMPLATE = get_prompt_text("critic")
 
 
 def critic_node(state: GraphState) -> dict:
@@ -345,26 +289,8 @@ def critic_node(state: GraphState) -> dict:
 
 
 # 8. RELEVANCY GRADER NODE  — Kiểm tra Context có liên quan không
-RELEVANCY_PROMPT_TEMPLATE = """Bạn là GIÁM KHẢO ĐÁNH GIÁ ĐỘ LIÊN QUAN trong hệ thống Chatbot Học thuật.
-
-NHIỆM VỤ: Đánh giá xem TÀI LIỆU có chứa thông tin để trả lời CÂU HỎI hay không.
-
-TIÊU CHÍ:
-1. Nếu TÀI LIỆU có chứa ít nhất 1 thông tin trực tiếp liên quan đến CÂU HỎI → "relevant".
-2. Nếu TÀI LIỆU hoàn toàn không liên quan, lạc đề, hoặc rỗng → "not_relevant".
-3. Không cần TÀI LIỆU trả lời hoàn chỉnh, chỉ cần có nội dung liên quan là đủ.
-
-TÀI LIỆU:
----
-{context}
----
-
-CÂU HỎI: {question}
-
-TRẢ VỀ ĐÚNG 1 CHUỖI JSON DUY NHẤT:
-{{"score": "relevant", "reason": "lý do ngắn gọn"}}
-hoặc
-{{"score": "not_relevant", "reason": "lý do ngắn gọn"}}"""
+# Ngày 17: Prompt đã được tách sang lc/prompts/templates.py (PromptOps)
+RELEVANCY_PROMPT_TEMPLATE = get_prompt_text("relevancy")
 
 
 def relevancy_grader_node(state: GraphState) -> dict:

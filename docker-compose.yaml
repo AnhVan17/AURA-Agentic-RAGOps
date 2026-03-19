@@ -8,7 +8,8 @@ services:
       - ./litellm_config.yaml:/app/config.yaml
     environment:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY_2=${GOOGLE_API_KEY_2}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - LITELLM_MASTER_KEY=sk-1234
     command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug" ]
     restart: always

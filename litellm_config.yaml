@@ -1,17 +1,27 @@
 model_list:
+  # Lớp 1: Chủ lực (Primary)
   - model_name: aura-llm-primary
     litellm_params:
-      model: gemini/gemini-1.5-flash
+      model: gemini/gemini-2.5-flash
       api_key: "os.environ/GOOGLE_API_KEY"
-    
-  - model_name: aura-llm-fallback
+      
+  # Lớp 2: Dự phòng tốc độ / Xử lý tác vụ nhẹ 
+  - model_name: aura-llm-fallback-1
     litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: "os.environ/OPENAI_API_KEY"
+      model: gemini/gemini-2.5-flash-lite
+      api_key: "os.environ/GOOGLE_API_KEY_2" 
+      
+  # Lớp 3: Cứu nạn thảm họa 
+  - model_name: aura-llm-fallback-2
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile 
+      api_key: "os.environ/GROQ_API_KEY"
 
 router_settings:
-  routing_strategy: simple-shuffle # Hoặc 'latency-based-routing' nếu có nhiều model
+  routing_strategy: simple-shuffle
+  fallbacks: 
+    - {"aura-llm-primary": ["aura-llm-fallback-1", "aura-llm-fallback-2"]}
   set_verbose: True
 
 general_settings:
-  master_key: "sk-1234" # Key để quản trị proxy nếu cần
+  master_key: "sk-1234" 
