@@ -1,0 +1,55 @@
+# ============================================================
+# AURA — API Service (FastAPI)
+# ============================================================
+# Multi-stage build: stage 1 install deps, stage 2 copy code
+# ============================================================
+
+FROM python:3.11-slim AS base
+
+# Prevent Python from writing .pyc files & enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+# ── Stage 1: Install system deps + Python deps ──────────────
+FROM base AS deps
+
+# System deps for PDF/OCR processing (PyMuPDF, pdfminer, rapidocr)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ── Stage 2: Copy source code ───────────────────────────────
+FROM deps AS runtime
+
+# Copy application code
+COPY app/ ./app/
+COPY core/ ./core/
+COPY lc/ ./lc/
+COPY ops/ ./ops/
+COPY configs/ ./configs/
+COPY eval/ ./eval/
+
+# Create directories for runtime data
+RUN mkdir -p /app/artifacts /app/qdrant_local_db /app/feedback_data
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/healthz', timeout=5)" || exit 1
+
+# Run FastAPI with uvicorn
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

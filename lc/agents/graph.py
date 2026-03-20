@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 from app.settings import APPSETTINGS
-from lc.prompts.templates import get_prompt_text  # Ngày 17: PromptOps
+from lc.prompts.templates import get_prompt_text  
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,6 @@ def _get_llm(temperature: float = 0) -> Any:
 
 
 # 3. ROUTER NODE (Ngày 9)
-# Ngày 17: Prompt đã được tách sang lc/prompts/templates.py (PromptOps)
 ROUTER_PROMPT_TEMPLATE = get_prompt_text("router")
 
 
@@ -94,7 +93,7 @@ def router_node(state: GraphState) -> dict:
 # 4. RESEARCHER NODE 
 def researcher_node(state: GraphState) -> dict:
     """
-    Gọi advanced_retrieve() từ Tuần 2 (BM25 + Qdrant + HyDE + Compression + Reorder).
+    Gọi advanced_retrieve() (BM25 + Qdrant + HyDE + Compression + Reorder).
     Nếu đang bị Critic đánh trượt (attempts > 1), log lại feedback để debug.
     """
     question = state.get("question", "")

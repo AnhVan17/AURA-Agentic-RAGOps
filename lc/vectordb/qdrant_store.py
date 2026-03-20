@@ -4,6 +4,7 @@ from app.settings import APPSETTINGS
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 import uuid
+import os
 
 _client: QdrantClient | None = None
 
@@ -11,11 +12,13 @@ def get_client() -> QdrantClient:
     """Singleton: chỉ tạo 1 QdrantClient duy nhất, tránh file-lock conflict ở chế độ local."""
     global _client
     if _client is None:
-        if APPSETTINGS.qdrant.url == "local":
+        # Docker env var overrides config file
+        qdrant_url = os.getenv("QDRANT_URL", APPSETTINGS.qdrant.url)
+        if qdrant_url == "local":
             _client = QdrantClient(path="qdrant_local_db")
         else:
             _client = QdrantClient(
-                url=APPSETTINGS.qdrant.url,
+                url=qdrant_url,
                 api_key=APPSETTINGS.qdrant.api_key,
                 prefer_grpc=APPSETTINGS.qdrant.prefer_grpc,
             )

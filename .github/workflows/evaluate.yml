@@ -1,0 +1,136 @@
+# ============================================================
+# 📊 AURA — CI/CD RAGAS Evaluation Pipeline
+# ============================================================
+# Ngày 19-20: Tự động đánh giá chất lượng RAG mỗi lần push
+#
+# Pipeline:
+#   1. Checkout code
+#   2. Setup Python 3.11 + install deps
+#   3. Chạy unit tests (fast, no API calls)
+#   4. Chạy RAGAS evaluation (20 câu, cần API key)
+#   5. Upload evaluation report artifact
+# ============================================================
+
+name: "\U0001F4CA RAGAS Evaluation CI"
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
+  pull_request:
+    branches: [main]
+
+# Hủy workflow cũ nếu có push mới trên cùng branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # JOB 1: Chạy Unit Tests (nhanh, không cần API key ngoại trừ Gemini)
+  # ============================================================
+  unit-tests:
+    name: "\U0001F9EA Unit Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      PYTHONPATH: .
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+    steps:
+      - name: "\U0001F4E5 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "\U0001F40D Setup Python 3.11"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: "\U0001F4E6 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-timeout
+
+      - name: "\U0001F9EA Run unit tests"
+        run: |
+          python -m pytest tests/ \
+            --ignore=tests/test_day19_20_ragas_ci.py \
+            -v --tb=short -x \
+            --timeout=120
+
+  # ============================================================
+  # JOB 2: Chạy RAGAS Evaluation (cần API key, chạy 20 câu hỏi)
+  # ============================================================
+  ragas-evaluation:
+    name: "\U0001F4CA RAGAS Evaluation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: unit-tests  # Chỉ chạy nếu unit tests pass
+
+    env:
+      PYTHONPATH: .
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+      SKIP_RAGAS: "1"  # Skip RAGAS lib evaluation, dùng manual metrics
+
+    steps:
+      - name: "\U0001F4E5 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "\U0001F40D Setup Python 3.11"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: "\U0001F4E6 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-timeout
+
+      - name: "\U0001F50D Verify golden dataset"
+        run: |
+          echo "📋 Checking eval/golden_dataset.json..."
+          python -c "
+          import json
+          with open('eval/golden_dataset.json') as f:
+              data = json.load(f)
+          print(f'✅ Golden dataset: {len(data)} questions')
+          for i, item in enumerate(data[:3]):
+              print(f'  Q{i+1}: {item[\"question\"][:60]}...')
+          "
+
+      - name: "\U0001F4CA Run RAGAS CI Evaluation"
+        run: |
+          python -m pytest tests/test_day19_20_ragas_ci.py \
+            -v -s --tb=long \
+            --timeout=600
+        continue-on-error: false
+
+      - name: "\U0001F4C4 Upload Evaluation Report"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report-${{ github.sha }}
+          path: eval/ci_report_*.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: "\U0001F4DD Print Report Summary"
+        if: always()
+        run: |
+          echo "📊 === EVALUATION REPORT SUMMARY ==="
+          if ls eval/ci_report_*.txt 1> /dev/null 2>&1; then
+            # Hiển thị 30 dòng đầu của report
+            head -30 eval/ci_report_*.txt
+          else
+            echo "⚠️ No evaluation report found"
+          fi

@@ -1,5 +1,5 @@
 """
-Ngày 17: PromptOps — Prompt Templates tập trung
+PromptOps — Prompt Templates tập trung
 =================================================
 Tách toàn bộ prompt ra khỏi graph.py, lưu tại đây.
 Hỗ trợ 2 chế độ:
@@ -18,9 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
 # LOCAL FALLBACK PROMPTS — Bản gốc từ graph.py
-# ============================================================
 
 ROUTER_TEMPLATE = """Bạn là Router điều hướng trong hệ thống Chatbot Học thuật tiếng Việt.
 
@@ -111,9 +109,7 @@ hoặc
 {{"score": "not_relevant", "reason": "lý do ngắn gọn"}}"""
 
 
-# ============================================================
 # REGISTRY — Ánh xạ tên → local template
-# ============================================================
 _LOCAL_REGISTRY = {
     "router": ROUTER_TEMPLATE,
     "chat": CHAT_TEMPLATE,
@@ -122,11 +118,9 @@ _LOCAL_REGISTRY = {
     "relevancy": RELEVANCY_TEMPLATE,
 }
 
-# ============================================================
 # HUB PULL — Load từ LangSmith Prompt Hub
-# ============================================================
+
 # Mapping tên prompt → repo trên Hub
-# Ví dụ: "router" → "anhvan/router-prompt"
 _HUB_REGISTRY = {
     "router": "anhvan/router-prompt",
     "chat": "anhvan/chat-prompt",

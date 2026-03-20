@@ -53,5 +53,9 @@ scripts/
 langchain.ipynb
 models_list.txt
 output_check.txt
+
+# Eval output files (keep golden_dataset.json and baseline_scores.json tracked)
+eval/baseline_report.txt
+eval/baseline_console.txt
+eval/ci_report_*.txt
 tests/
-eval/

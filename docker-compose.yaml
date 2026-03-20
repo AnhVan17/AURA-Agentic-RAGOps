@@ -1,15 +1,146 @@
+# ============================================================
+# AURA — Docker Compose (Ngày 21+)
+# ============================================================
+# 4 dịch vụ:
+#   1. qdrant    — Vector Database (phải start trước)
+#   2. redis     — Semantic Cache + Chat History
+#   3. api       — FastAPI backend
+#   4. ui        — Streamlit frontend
+#
+# Thêm (optional):
+#   5. litellm   — LLM Gateway / Failover proxy
+#
+# Chạy:
+#   docker compose up -d
+#
+# Dừng:
+#   docker compose down
+#
+# Xem logs:
+#   docker compose logs -f api
+# ============================================================
+
 services:
+  # ──────────────────────────────────────────────────────────
+  # 1. QDRANT — Vector Database
+  # ──────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: aura-qdrant
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage     # Persist data khi restart
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────────
+  # 2. REDIS — Semantic Cache + Chat Message History
+  # ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: aura-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────────
+  # 3. API — FastAPI Backend
+  # ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: aura-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override Qdrant URL to point to the container (not localhost)
+      - QDRANT_URL=http://qdrant:6333
+      # Override Redis URL to point to the container
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      # Mount configs so you can edit without rebuild
+      - ./configs:/app/configs:ro
+      # Mount data for PDF upload persistence
+      - ./artifacts:/app/artifacts
+      # Mount feedback data
+      - ./feedback_data:/app/feedback_data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import requests; requests.get('http://localhost:8000/healthz', timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────────
+  # 4. UI — Streamlit Frontend
+  # ──────────────────────────────────────────────────────────
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    container_name: aura-ui
+    ports:
+      - "8501:8501"
+    environment:
+      # UI connects to API via Docker network (not localhost)
+      - API_BASE=http://api:8000
+    volumes:
+      - ./feedback_data:/app/feedback_data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────────
+  # 5. LITELLM — LLM Gateway (Optional)
+  # ──────────────────────────────────────────────────────────
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: litellm-proxy
+    container_name: aura-litellm
     ports:
       - "4000:4000"
     volumes:
-      - ./litellm_config.yaml:/app/config.yaml
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
     environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - GOOGLE_API_KEY_2=${GOOGLE_API_KEY_2}
-      - GROQ_API_KEY=${GROQ_API_KEY}
       - LITELLM_MASTER_KEY=sk-1234
-    command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug" ]
-    restart: always
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    profiles:
+      - full    # Chỉ chạy khi: docker compose --profile full up
+    restart: unless-stopped
+
+# ──────────────────────────────────────────────────────────
+# VOLUMES — Persistent storage
+# ──────────────────────────────────────────────────────────
+volumes:
+  qdrant_data:
+    driver: local
+  redis_data:
+    driver: local

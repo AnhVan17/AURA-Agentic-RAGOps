@@ -1,5 +1,5 @@
 """
-Ngày 18: Feedback Collector — Human-in-the-Loop (Offline)
+: Feedback Collector — Human-in-the-Loop (Offline)
 ==========================================================
 Thu thập phản hồi 👍/👎 từ người dùng.
 

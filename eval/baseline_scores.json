@@ -1,0 +1,18 @@
+{
+  "version": "day5_baseline",
+  "date": "2026-03-07",
+  "description": "Baseline scores from Day 5 evaluation. RAGAS metrics returned NaN, using manual metrics as primary thresholds.",
+  "thresholds": {
+    "context_hit_rate": 0.3,
+    "answer_similarity": 0.15,
+    "answer_completeness": 0.5,
+    "min_answer_length": 50
+  },
+  "ragas_thresholds": {
+    "faithfulness": 0.5,
+    "answer_relevancy": 0.5,
+    "context_precision": 0.3,
+    "context_recall": 0.3
+  },
+  "notes": "Baseline Day 5 RAGAS returned NaN for all metrics. CI uses manual metrics (context_hit_rate, answer_similarity) as primary gates. RAGAS metrics are optional and will be used when available."
+}

@@ -1,0 +1,53 @@
+# Ignore patterns for Docker build context (reduces image size)
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker (don't send docker files into the build context recursively)
+docker-compose*.yaml
+docker-compose*.yml
+
+# Data & artifacts (these are mounted as volumes, not baked into image)
+qdrant_local_db/
+artifacts/
+data/
+feedback_data/
+
+# Docs & tests (not needed in prod image)
+docs/
+tests/
+eval/baseline_report.txt
+eval/baseline_console.txt
+eval/ci_report_*.txt
+*.md
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Misc
+models_list.txt
+output_check.txt
+langchain.ipynb
+scripts/
+.agent/
+.agents/

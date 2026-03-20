@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # ===== BƯỚC 1: SETUP SEMANTIC CACHING & MEMORY STORE =====
 
-_redis_url = "redis://localhost:6379"
+_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 _use_redis = False
 _memory_store = {}
 
