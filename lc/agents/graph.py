@@ -47,7 +47,7 @@ def _get_llm(temperature: float = 0) -> Any:
     # Mặc định gọi trực tiếp Gemini (Legacy)
     return ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
-        google_api_key=APPSETTINGS.GOOGLE_API_KEY,
+        google_api_key=APPSETTINGS.google_api_key,
         temperature=temperature,
     )
 
@@ -376,7 +376,7 @@ def fallback_node(state: GraphState) -> dict:
         error_type = "not_relevant"
         logger.warning("[Fallback] Tài liệu không liên quan đến câu hỏi.")
         msg = (
-            "📄 Xin lỗi bạn, tài liệu hiện có không chứa thông tin liên quan "
+            " Xin lỗi bạn, tài liệu hiện có không chứa thông tin liên quan "
             "đến câu hỏi của bạn. Vui lòng tải lên tài liệu phù hợp hoặc "
             "đặt lại câu hỏi cụ thể hơn."
         )
@@ -396,7 +396,42 @@ def fallback_node(state: GraphState) -> dict:
     }
 
 
-# 10. CONDITIONAL EDGES 
+# 11. FORMATTER NODE — Định dạng và thêm trích dẫn
+def formatter_node(state: GraphState) -> dict:
+    """Định dạng câu trả lời cuối cùng và tự động thêm trích dẫn từ Metadata."""
+    draft = state.get("draft_answer", "")
+    critic_score = state.get("critic_score", "")
+    context = state.get("context", [])
+    next_action = state.get("next_action", "search")
+    
+    # Bỏ qua trích dẫn nếu đây là câu trả lời chat hoặc lỗi từ Fallback
+    if next_action == "chat" or critic_score in ("no_session", "not_relevant", "max_retries"):
+        return {"final_answer": draft}
+        
+    # Lọc trùng lặp (Deduplicate)
+    citations = []
+    seen = set()
+    for doc in context:
+        fname = doc.get("file_name")
+        page = doc.get("page_idx")
+        if fname:
+            cite_str = str(fname)
+            if page is not None:
+                cite_str += f" - Trang {page}"
+            if cite_str not in seen:
+                seen.add(cite_str)
+                citations.append(cite_str)
+                
+    final_answer = draft
+    if citations:
+        final_answer += "\n\n**Nguồn tham khảo:**\n"
+        for c in citations:
+            final_answer += f"- {c}\n"
+            
+    return {"final_answer": final_answer}
+
+
+# 12. CONDITIONAL EDGES 
 def route_decision(state: GraphState) -> str:
     """Router → 'search' hoặc 'chat'."""
     return state.get("next_action", "search")
@@ -462,8 +497,8 @@ def build_core_graph():
         {"search": "researcher", "chat": "chat"},
     )
 
-    # ── Chat → END (không cần format vì chat trả lời đơn giản) ──
-    workflow.add_edge("chat", END)
+    # ── Chat → Formatter (formatter sẽ bỏ qua trích dẫn nhờ next_action='chat') ──
+    workflow.add_edge("chat", "formatter")
 
     # ── Researcher → Relevancy Grader ──
     workflow.add_edge("researcher", "relevancy_grader")

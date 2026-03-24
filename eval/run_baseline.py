@@ -157,9 +157,9 @@ def step3_evaluate_ragas(results: list) -> dict:
             temperature=0,
         )
         judge_embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-2-preview",
         )
-        print("  ✅ Gemini Judge LLM + Embeddings đã sẵn sàng")
+        print("  Gemini Judge LLM + Embeddings đã sẵn sàng")
 
         # Chuẩn bị dataset theo format RAGAS yêu cầu
         eval_data = {
@@ -170,7 +170,7 @@ def step3_evaluate_ragas(results: list) -> dict:
         }
         dataset = Dataset.from_dict(eval_data)
 
-        print("  🔄 Đang chấm điểm (có thể mất 5-15 phút)...")
+        print("   Đang chấm điểm (có thể mất 5-15 phút)...")
         t0 = time.perf_counter()
 
         # Chạy RAGAS evaluation với Gemini
@@ -187,15 +187,15 @@ def step3_evaluate_ragas(results: list) -> dict:
             run_config=RunConfig(timeout=180, max_workers=2),
         )
         dt = time.perf_counter() - t0
-        print(f"  ✅ Hoàn tất trong {dt:.1f} giây\n")
+        print(f"   Hoàn tất trong {dt:.1f} giây\n")
         return {"scores": score, "detail_df": score.to_pandas()}
 
     except ImportError as e:
-        print(f"  ⚠️ Thiếu thư viện: {e}")
+        print(f"   Thiếu thư viện: {e}")
         print("  → Chuyển sang chấm điểm thủ công đơn giản...")
         return step3_manual_evaluate(results)
     except Exception as e:
-        print(f"  ⚠️ RAGAS lỗi: {e}")
+        print(f"   RAGAS lỗi: {e}")
         print("  → Chuyển sang chấm điểm thủ công...")
         return step3_manual_evaluate(results)
 
@@ -248,7 +248,7 @@ def step4_report(results: list, eval_result: dict):
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         log("=" * 60, f)
-        log("📊 BASELINE EVALUATION REPORT - NGÀY 5", f)
+        log(" BASELINE EVALUATION REPORT - NGÀY 5", f)
         log(f"   Thời gian: {time.strftime('%Y-%m-%d %H:%M:%S')}", f)
         log(f"   Session: {SESSION_ID}", f)
         log(f"   Số câu hỏi: {len(results)}", f)
@@ -256,18 +256,18 @@ def step4_report(results: list, eval_result: dict):
         log("=" * 60, f)
 
         # Điểm tổng
-        log("\n🎯 ĐIỂM TỔNG:", f)
+        log("\n ĐIỂM TỔNG:", f)
         scores = eval_result.get("scores", {})
         if hasattr(scores, "items"):
             for k, v in scores.items():
                 if isinstance(v, (int, float)):
-                    bar = "█" * int(v * 20) + "░" * (20 - int(v * 20))
+                    bar = "" * int(v * 20) + "░" * (20 - int(v * 20))
                     log(f"   {k:25s}: {v:.4f}  [{bar}]", f)
         else:
             log(f"   Scores: {scores}", f)
 
         # Chi tiết từng câu hỏi
-        log("\n📝 CHI TIẾT TỪNG CÂU:", f)
+        log("\n CHI TIẾT TỪNG CÂU:", f)
         log("-" * 60, f)
 
         detail = eval_result.get("detail", eval_result.get("detail_df", None))
@@ -288,9 +288,9 @@ def step4_report(results: list, eval_result: dict):
                 log(f"       Answer Length     : {s['answer_len']} chars", f)
 
         log("\n" + "=" * 60, f)
-        log("✅ Báo cáo đã lưu vào: " + OUTPUT_FILE, f)
+        log(" Báo cáo đã lưu vào: " + OUTPUT_FILE, f)
 
-    print(f"\n📁 File báo cáo: {OUTPUT_FILE}")
+    print(f"\n File báo cáo: {OUTPUT_FILE}")
 
 
 # ====================================================
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     with open(GOLDEN_DATASET, "r", encoding="utf-8") as f:
         questions = json.load(f)
 
-    print(f"📚 Đã load {len(questions)} câu hỏi từ {GOLDEN_DATASET}\n")
+    print(f" Đã load {len(questions)} câu hỏi từ {GOLDEN_DATASET}\n")
 
     # Bước 1: Nạp papers (nếu chưa nạp)
     step1_ingest_papers()

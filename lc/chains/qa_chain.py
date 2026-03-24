@@ -37,7 +37,7 @@ def init_globals():
         r = redis.Redis.from_url(_redis_url)
         r.ping()
         _use_redis = True
-        logger.info("✅ Redis connected! Enabling Redis Semantic Caching & Chat History.")
+        logger.info(" Redis connected! Enabling Redis Semantic Caching & Chat History.")
         
         api_key = APPSETTINGS.google_api_key
         if api_key:
@@ -45,11 +45,11 @@ def init_globals():
             # Giúp trả lời siêu tốc nếu câu hỏi ý nghĩa tương tự
             set_llm_cache(RedisSemanticCache(
                 redis_url=_redis_url,
-                embedding=GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key),
+                embedding=GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2-preview", google_api_key=api_key),
                 score_threshold=0.1
             ))
     except Exception as e:
-        logger.warning(f"⚠️ Redis is not available locally. Defaulting to InMemoryCache. (Error: {e})")
+        logger.warning(f" Redis is not available locally. Defaulting to InMemoryCache. (Error: {e})")
         set_llm_cache(InMemoryCache())
 
 # Kích hoạt cache khi module load

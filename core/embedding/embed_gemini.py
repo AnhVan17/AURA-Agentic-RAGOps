@@ -4,7 +4,7 @@ import time, math, random
 from core.telemetry.telemetry import timeit_stage
 from app.settings import APPSETTINGS
 
-EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_MODEL = "gemini-embedding-2-preview"
 
 # === Khởi tạo Embedding Client (google-genai mới) ===
 _genai_client = None
@@ -25,7 +25,7 @@ except Exception as e:
 def _embed_batch(texts: List[str], task_type: str = "retrieval_document") -> List[List[float]]:
     if not _client_ok or _genai_client is None:
         print("  Warning: Mock Embedding (API Key not configured)")
-        return [[(hash(t) % 1000) / 1000.0 for _ in range(768)] for t in texts]
+        return [[(hash(t) % 1000) / 1000.0 for _ in range(3072)] for t in texts]
 
     try:
         result = _genai_client.models.embed_content(
@@ -73,7 +73,7 @@ def embed_texts(
                 if attempt < 3:
                     time.sleep(1 * (2 ** attempt) + random.random())
                 else:
-                    current_dim = len(vecs[0]) if vecs else 768
+                    current_dim = len(vecs[0]) if vecs else 3072
                     print(f" Filling zeros for batch starting at {i}")
                     vecs.extend([[0.0] * current_dim for _ in batch])
 

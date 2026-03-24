@@ -1,16 +1,3 @@
-"""
-Ngày 18: Streamlit Feedback UI — Human-in-the-Loop
-===================================================
-Giao diện chat với nút 👍/👎 để thu thập phản hồi.
-
-Chạy:
-    streamlit run ui/streamlit_app.py
-
-Yêu cầu:
-    - FastAPI backend đang chạy ở localhost:8000
-    - pip install streamlit
-"""
-
 import os
 import json
 import streamlit as st

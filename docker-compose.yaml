@@ -1,5 +1,5 @@
 # ============================================================
-# AURA — Docker Compose (Ngày 21+)
+# AURA — Docker Compose
 # ============================================================
 # 4 dịch vụ:
 #   1. qdrant    — Vector Database (phải start trước)
@@ -28,33 +28,26 @@ services:
     image: qdrant/qdrant:v1.12.4
     container_name: aura-qdrant
     ports:
-      - "6333:6333"   # REST API
-      - "6334:6334"   # gRPC
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC
     volumes:
-      - qdrant_data:/qdrant/storage     # Persist data khi restart
+      - qdrant_data:/qdrant/storage # Persist data khi restart
     environment:
       - QDRANT__SERVICE__HTTP_PORT=6333
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────────
   # 2. REDIS — Semantic Cache + Chat Message History
   # ──────────────────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack-server:latest
     container_name: aura-redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -86,11 +79,11 @@ services:
       - ./feedback_data:/app/feedback_data
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import requests; requests.get('http://localhost:8000/healthz', timeout=5)\" || exit 1"]
+      test: [ "CMD-SHELL", "python -c \"import requests; requests.get('http://localhost:8000/healthz', timeout=5)\" || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -131,9 +124,9 @@ services:
       - .env
     environment:
       - LITELLM_MASTER_KEY=sk-1234
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: [ "--config", "/app/config.yaml", "--port", "4000" ]
     profiles:
-      - full    # Chỉ chạy khi: docker compose --profile full up
+      - full # Chỉ chạy khi: docker compose --profile full up
     restart: unless-stopped
 
 # ──────────────────────────────────────────────────────────

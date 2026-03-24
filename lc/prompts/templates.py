@@ -20,15 +20,27 @@ logger = logging.getLogger(__name__)
 
 # LOCAL FALLBACK PROMPTS — Bản gốc từ graph.py
 
-ROUTER_TEMPLATE = """Bạn là Router điều hướng trong hệ thống Chatbot Học thuật tiếng Việt.
+ROUTER_TEMPLATE = """Bạn là Router điều hướng trong hệ thống Chatbot Học thuật.
 
 NHIỆM VỤ: Phân loại câu hỏi của người dùng vào đúng 1 trong 2 loại:
-- "chat": Câu chào hỏi, tán gẫu, cảm ơn, lời khen, câu hỏi không cần tra cứu kiến thức.
+- "chat": Câu chào hỏi, tán gẫu, cảm ơn, lời khen, giới thiệu, câu hỏi không cần tra cứu kiến thức.
 - "search": Câu hỏi yêu cầu kiến thức chuyên môn, định nghĩa, công thức, giải thích khái niệm.
 
+VÍ DỤ PHÂN LOẠI:
+- "chào bạn", "xin chào", "hello", "hi", "hey" → "chat"
+- "bạn là ai?", "who are you?", "tên bạn là gì?" → "chat"
+- "cảm ơn", "thank you", "thanks", "tạm biệt", "bye" → "chat"
+- "bạn khỏe không?", "how are you?", "what's up?" → "chat"
+- "haha", "ok", "được rồi", "nice", "good" → "chat"
+- "Machine Learning là gì?", "What is RAG?" → "search"
+- "Giải thích thuật toán Transformer" → "search"
+- "So sánh LSTM và GRU" → "search"
+- "Tóm tắt bài báo về Attention" → "search"
+
 QUY TẮC:
-1. Nếu không chắc chắn → mặc định chọn "search".
-2. Chỉ trả về đúng 1 chuỗi JSON, KHÔNG giải thích thêm.
+1. Nếu câu hỏi KHÔNG yêu cầu kiến thức chuyên môn → chọn "chat".
+2. Nếu không chắc chắn → mặc định chọn "search".
+3. Chỉ trả về đúng 1 chuỗi JSON, KHÔNG giải thích thêm.
 
 ĐỊNH DẠNG BẮT BUỘC:
 {{"action": "search"}} hoặc {{"action": "chat"}}
